@@ -8,18 +8,18 @@ as the AI engine. Communication happens over your **Tailscale** private network.
 ## Architecture Overview
 
 ```
-┌─────────────────────────────┐        Tailscale VPN        ┌──────────────────────────────┐
-│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►   │        Windows PC             │
-│                             │                              │                               │
-│  SwiftUI BoardView          │                              │  lc0_server.py                │
-│  (swift-chess package)      │                              │   ├── WebSocket server :8765  │
-│                             │                              │   └── lc0.exe (UCI pipe)      │
-│  ChessStore (Combine)       │                              │                               │
-│  AppStore (ObservableObj)   │                              │  lc0_tray.py                  │
-│  NetworkService (WebSocket) │                              │   └── System tray on/off      │
-│  Lc0Player (custom player)  │                              │                               │
-│  AnalysisService            │                              │  lc0.exe + weights .pb.gz     │
-└─────────────────────────────┘                              └──────────────────────────────┘
+┌─────────────────────────────┐        Tailscale VPN       ┌───────────────────────────────┐
+│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►  │        Windows PC             │
+│                             │                            │                               │
+│  SwiftUI BoardView          │                            │  lc0_server.py                │
+│  (swift-chess package)      │                            │   ├── WebSocket server :8765  │
+│                             │                            │   └── lc0.exe (UCI pipe)      │
+│  ChessStore (Combine)       │                            │                               │
+│  AppStore (ObservableObj)   │                            │  lc0_tray.py                  │
+│  NetworkService (WebSocket) │                            │   └── System tray on/off      │
+│  Lc0Player (custom player)  │                            │                               │
+│  AnalysisService            │                            │  lc0.exe + weights .pb.gz     │
+└─────────────────────────────┘                            └───────────────────────────────┘
 ```
 
 ### Data Flow

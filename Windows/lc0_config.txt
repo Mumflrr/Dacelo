@@ -1,0 +1,15 @@
+# lc0_config.txt — Settings for lc0_server.py and lc0_tray.py
+# Edit these values to match your setup.
+
+# Path to lc0.exe (download from https://github.com/LeelaChessZero/lc0/releases)
+lc0 = C:\lc0\lc0.exe
+
+# Optional: path to a weights file. Leave blank to use lc0's bundled default.
+# Download best nets from: https://lczero.org/play/networks/bestnets/
+weights =
+
+# WebSocket port your iOS/macOS app will connect to
+port = 8765
+
+# Number of CPU threads for lc0 (use 2-8 depending on your PC)
+threads = 4

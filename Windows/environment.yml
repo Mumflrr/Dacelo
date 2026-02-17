@@ -1,0 +1,22 @@
+# environment.yaml — Conda environment for the lc0 WebSocket server
+#
+# Setup (run once):
+#   conda env create -f environment.yaml
+#
+# Activate before running the server:
+#   conda activate lc0-server
+#
+# Update dependencies later:
+#   conda env update -f environment.yaml --prune
+
+name: lc0-server
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - websockets>=12.0
+      - pystray>=0.19.5
+      - pillow>=10.0.0
