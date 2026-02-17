@@ -8,18 +8,18 @@ as the AI engine. Communication happens over your **Tailscale** private network.
 ## Architecture Overview
 
 ```
-┌─────────────────────────────┐        Tailscale VPN       ┌───────────────────────────────┐
-│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►  │        Windows PC             │
-│                             │                            │                               │
-│  SwiftUI BoardView          │                            │  lc0_server.py                │
-│  (swift-chess package)      │                            │   ├── WebSocket server :8765  │
-│                             │                            │   └── lc0.exe (UCI pipe)      │
-│  ChessStore (Combine)       │                            │                               │
-│  AppStore (ObservableObj)   │                            │  lc0_tray.py                  │
-│  NetworkService (WebSocket) │                            │   └── System tray on/off      │
-│  Lc0Player (custom player)  │                            │                               │
-│  AnalysisService            │                            │  lc0.exe + weights .pb.gz     │
-└─────────────────────────────┘                            └───────────────────────────────┘
+┌─────────────────────────────┐        Tailscale VPN        ┌──────────────────────────────┐
+│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►   │        Windows PC             │
+│                             │                              │                               │
+│  SwiftUI BoardView          │                              │  lc0_server.py                │
+│  (swift-chess package)      │                              │   ├── WebSocket server :8765  │
+│                             │                              │   └── lc0.exe (UCI pipe)      │
+│  ChessStore (Combine)       │                              │                               │
+│  AppStore (ObservableObj)   │                              │  lc0_tray.py                  │
+│  NetworkService (WebSocket) │                              │   └── System tray on/off      │
+│  Lc0Player (custom player)  │                              │                               │
+│  AnalysisService            │                              │  lc0.exe + weights .pb.gz     │
+└─────────────────────────────┘                              └──────────────────────────────┘
 ```
 
 ### Data Flow
@@ -73,6 +73,17 @@ conda env create -f Windows/environment.yaml
 conda activate lc0-server
 ```
 
+**Optional — cuDNN for better performance (NVIDIA GPUs only):**
+
+If you have an NVIDIA GPU and want ~10-15% faster analysis, install cuDNN via conda:
+
+```powershell
+conda activate lc0-server
+conda install -c conda-forge cudnn
+```
+
+Then download the `cudnn-nodll` lc0 release instead of `cuda12`. Conda manages the DLLs automatically.
+
 Or with plain pip if you prefer:
 
 ```powershell
@@ -84,6 +95,11 @@ pip install websockets pystray pillow
 Download the latest Windows release from:
 https://github.com/LeelaChessZero/lc0/releases
 
+**Which version to download:**
+- **NVIDIA GPU**: Use `cuda12` (includes all DLLs, easiest) or `cudnn` for slightly better performance
+- **AMD/Intel GPU or CPU-only**: Use `cpu-dnnl` or `openblas`
+- **Using conda**: See cuDNN setup below for best performance
+
 Extract to `C:\lc0\`. You should have `C:\lc0\lc0.exe`.
 
 ### 3. Download a neural network weights file
@@ -91,10 +107,12 @@ Extract to `C:\lc0\`. You should have `C:\lc0\lc0.exe`.
 Get the best network from:
 https://lczero.org/play/networks/bestnets/
 
-Place the `.pb.gz` file in `C:\lc0\` and update `lc0_config.txt`:
+Place the `.pb.gz` (or extracted `.pb`) file in `C:\lc0\` and update `lc0_config.txt`:
 ```
 weights = C:\lc0\BT4-1024x15x32h-swa-6147500.pb.gz
 ```
+
+**Note:** Both `.pb` and `.pb.gz` work — the `.gz` is just compressed. If you extract it, just point to the `.pb` file directly.
 
 ### 4. Edit lc0_config.txt
 
@@ -119,12 +137,18 @@ python lc0_server.py --lc0 C:\lc0\lc0.exe --port 8765
 Press **Win + R** → type `shell:startup` → copy a shortcut to `lc0_tray.bat` into that folder.
 The server will start automatically when you log in.
 
-### 7. Open Windows Firewall for port 8765
+### 6. Firewall configuration (optional)
+
+**If connecting over Tailscale only:** You do **NOT** need to open Windows Firewall. Tailscale creates a private VPN between your devices — the `100.x.x.x` IP is only reachable by devices on your Tailscale network, never exposed to the internet.
+
+**If you want defense-in-depth anyway**, or if connecting via LAN without Tailscale:
 
 ```powershell
 # Run as Administrator
 netsh advfirewall firewall add rule name="lc0 WebSocket" dir=in action=allow protocol=TCP localport=8765
 ```
+
+**Port 8765** is arbitrary — you can use any port above 1024. Just update both `lc0_config.txt` and the app's Settings to match.
 
 ---
 
@@ -155,7 +179,25 @@ Copy the files from `Xcode/LeelaChessApp/` into your Xcode project groups:
 | `Store/AppStore.swift` | Store |
 | `Views/ContentView.swift` | Views |
 
-### 4. Configure your Tailscale hostname
+### 4. Configure network permissions
+
+**For macOS:** 
+- Click your target → **Signing & Capabilities** tab → **+ Capability** → **App Sandbox**
+- Under App Sandbox, check **✅ Outgoing Connections (Client)**
+
+**For iOS:**
+- Click your target → **Info** tab → Add these three keys:
+
+| Key | Type | Value |
+|-----|------|-------|
+| `App Transport Security Settings` | Dictionary | (add sub-keys below) |
+| └─ `Allow Arbitrary Loads in Web Content` | Boolean | `YES` |
+| `Privacy - Local Network Usage Description` | String | `"Connect to Windows PC via Tailscale for lc0 analysis"` |
+| `Bonjour services` | Array | Item 0: `_ws._tcp` |
+
+These allow plain WebSocket (`ws://`) over your Tailscale VPN and trigger the local network permission prompt on iOS.
+
+### 5. Configure your Tailscale hostname
 
 In the app's **Settings screen** (gear icon), enter:
 - **Tailscale Host**: your Windows PC's Tailscale hostname or IP (e.g. `my-gaming-pc` or `100.64.0.5`)
@@ -163,7 +205,7 @@ In the app's **Settings screen** (gear icon), enter:
 
 Find your PC's Tailscale IP in the Tailscale app or at https://login.tailscale.com/admin/machines
 
-### 5. Build and run
+### 6. Build and run
 
 The app will automatically try to connect when launched.
 
@@ -192,10 +234,17 @@ The app will automatically try to connect when launched.
 
 ## Troubleshooting
 
+**Conda "command not found" on Windows**
+- Open **Anaconda Prompt** (not PowerShell) → run `conda init powershell` and `conda init cmd.exe`
+- Open PowerShell **as Administrator** → run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+- Close and reopen all terminal windows for changes to take effect
+- If still broken, manually add these to your PATH: `C:\Users\<YourUsername>\miniconda3`, `...\Scripts`, `...\condabin`
+
 **"Not connected" / connection timeout**
-- Confirm Tailscale is running on both devices and the PC is reachable (`ping <tailscale-ip>`)
-- Check Windows Firewall allows port 8765
+- Confirm Tailscale is running on both devices and the PC is reachable: `ping <tailscale-ip>` from your Mac/iPhone
+- If using Tailscale, you do NOT need to open Windows Firewall (the `100.x.x.x` IP bypasses it)
 - Check `lc0_server.log` in the Windows folder for errors
+- Make sure you entered the correct Tailscale IP in the app's Settings (not your public IP)
 
 **lc0 crashes on startup**
 - The lc0 binary requires a compatible GPU driver; check your CUDA/DirectML installation
