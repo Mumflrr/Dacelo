@@ -85,7 +85,7 @@ conda activate lc0-server
 conda install -c conda-forge cudnn
 ```
 
-Then download the `cudnn-nodll` lc0 release instead of `cuda12`. Conda manages the DLLs automatically.
+Then download the `cudnn` lc0 release instead of `cuda12`. Conda manages the DLLs automatically.
 
 ### 2. Download lc0
 

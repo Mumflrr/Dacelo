@@ -4,7 +4,7 @@
 # Path to lc0.exe (download from https://github.com/LeelaChessZero/lc0/releases)
 lc0 = D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe
 
-# Optional: path to a weights file. Leave blank to use lc0's bundled default.
+# Path to a weights file
 # Download best nets from: https://lczero.org/play/networks/bestnets/
 weights = D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb
 
