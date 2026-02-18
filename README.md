@@ -1,7 +1,8 @@
 # LeelaChessApp — iOS/macOS ↔ Windows PC via Tailscale
 
-A chess app where your Apple devices use **Leela Chess Zero (lc0)** running on your Windows PC
-as the AI engine. Communication happens over your **Tailscale** private network.
+A chess app where your Apple devices use **Leela Chess Zero (lc0)** running on Windows PC
+as the AI engine. Communication happens over **Tailscale** private network. Allows for
+Player vs Engine with move analysis.
 
 ---
 
@@ -9,17 +10,17 @@ as the AI engine. Communication happens over your **Tailscale** private network.
 
 ```
 ┌─────────────────────────────┐        Tailscale VPN        ┌──────────────────────────────┐
-│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►   │        Windows PC             │
-│                             │                              │                               │
-│  SwiftUI BoardView          │                              │  lc0_server.py                │
-│  (swift-chess package)      │                              │   ├── WebSocket server :8765  │
-│                             │                              │   └── lc0.exe (UCI pipe)      │
-│  ChessStore (Combine)       │                              │                               │
-│  AppStore (ObservableObj)   │                              │  lc0_tray.py                  │
-│  NetworkService (WebSocket) │                              │   └── System tray on/off      │
-│  Lc0Player (custom player)  │                              │                               │
-│  AnalysisService            │                              │  lc0.exe + weights .pb.gz     │
-└─────────────────────────────┘                              └──────────────────────────────┘
+│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►   │        Windows PC            │
+│                             │                             │                              │
+│  SwiftUI BoardView          │                             │  lc0_server.py               │
+│  (swift-chess package)      │                             │   ├── WebSocket server :8765 │
+│                             │                             │   └── lc0.exe (UCI pipe)     │
+│  ChessStore (Combine)       │                             │                              │
+│  AppStore (ObservableObj)   │                             │  lc0_tray.py                 │
+│  NetworkService (WebSocket) │                             │   └── System tray on/off     │
+│  Lc0Player (custom player)  │                             │                              │
+│  AnalysisService            │                             │  lc0.exe + weights .pb.g     │
+└─────────────────────────────┘                             └──────────────────────────────┘
 ```
 
 ### Data Flow
@@ -28,7 +29,7 @@ as the AI engine. Communication happens over your **Tailscale** private network.
 2. If it's the engine's turn → `Lc0Player.move()` fires
 3. `NetworkService.engineMove(fen:)` sends JSON over WebSocket to PC
 4. `lc0_server.py` pipes `position fen … go movetime …` to `lc0.exe`
-5. lc0 replies with `bestmove e2e4`; server sends JSON back
+5. lc0 replies; server sends JSON back
 6. `Lc0Player` calls `store.send(.make(move:))` to play the move
 7. After every move, `AnalysisService.analyse(fen:)` fetches feedback
 
@@ -47,15 +48,17 @@ LeelaChessApp/
 │
 ├── Xcode/
 │   └── LeelaChessApp/
-│       ├── LeelaChessApp.swift     ← @main SwiftUI entry point
+│       ├── LeelaChessApp.swift       ← @main SwiftUI entry point
 │       ├── Network/
 │       │   └── NetworkService.swift  ← WebSocket client, async/await API
 │       ├── Engine/
 │       │   └── Lc0Player.swift       ← Chess.Player that calls the server
 │       ├── Store/
 │       │   └── AppStore.swift        ← Wires ChessStore + services together
-│       └── Views/
-│           └── ContentView.swift     ← Main UI + Settings
+│       ├── Views/
+│       │   └── ContentView.swift     ← Main UI + Settings
+│       └── AnalysisService/
+│           └── Analysis.swift        ← Control how analysis operates
 │
 └── Package.swift                   ← SPM manifest (or add via Xcode GUI)
 ```
@@ -84,12 +87,6 @@ conda install -c conda-forge cudnn
 
 Then download the `cudnn-nodll` lc0 release instead of `cuda12`. Conda manages the DLLs automatically.
 
-Or with plain pip if you prefer:
-
-```powershell
-pip install websockets pystray pillow
-```
-
 ### 2. Download lc0
 
 Download the latest Windows release from:
@@ -100,25 +97,23 @@ https://github.com/LeelaChessZero/lc0/releases
 - **AMD/Intel GPU or CPU-only**: Use `cpu-dnnl` or `openblas`
 - **Using conda**: See cuDNN setup below for best performance
 
-Extract to `C:\lc0\`. You should have `C:\lc0\lc0.exe`.
+Extract to base repo folder. You should have `path/to/repo/Windows/lc0/lc0.exe`.
 
 ### 3. Download a neural network weights file
 
 Get the best network from:
 https://lczero.org/play/networks/bestnets/
 
-Place the `.pb.gz` (or extracted `.pb`) file in `C:\lc0\` and update `lc0_config.txt`:
+Place the `.pb.gz` (or extracted `.pb`) file in base repo folder and update `lc0_config.txt`:
 ```
-weights = C:\lc0\BT4-1024x15x32h-swa-6147500.pb.gz
+weights = path\to\repo\Windows\lc0\<weights-file>.pb(.gz)
 ```
-
-**Note:** Both `.pb` and `.pb.gz` work — the `.gz` is just compressed. If you extract it, just point to the `.pb` file directly.
 
 ### 4. Edit lc0_config.txt
 
 ```ini
-lc0     = C:\lc0\lc0.exe
-weights = C:\lc0\<your-weights-file>.pb.gz
+lc0     = path/to/repo/Windows/lc0/lc0.exe
+weights = path/to/repo/Windows/lc0/<weights-file>.pb.gz
 port    = 8765
 threads = 4
 ```
@@ -129,26 +124,15 @@ threads = 4
 
 **Option B — Terminal**:
 ```powershell
-python lc0_server.py --lc0 C:\lc0\lc0.exe --port 8765
+python lc0_server.py --lc0 ./lc0/lc0.exe --port 8765
 ```
+**Port 8765** is arbitrary — you can use any port above 1024. Just update both `lc0_config.txt` and the app's Settings to match.
+
 
 ### 6. Add to Windows Startup (optional)
 
 Press **Win + R** → type `shell:startup` → copy a shortcut to `lc0_tray.bat` into that folder.
 The server will start automatically when you log in.
-
-### 6. Firewall configuration (optional)
-
-**If connecting over Tailscale only:** You do **NOT** need to open Windows Firewall. Tailscale creates a private VPN between your devices — the `100.x.x.x` IP is only reachable by devices on your Tailscale network, never exposed to the internet.
-
-**If you want defense-in-depth anyway**, or if connecting via LAN without Tailscale:
-
-```powershell
-# Run as Administrator
-netsh advfirewall firewall add rule name="lc0 WebSocket" dir=in action=allow protocol=TCP localport=8765
-```
-
-**Port 8765** is arbitrary — you can use any port above 1024. Just update both `lc0_config.txt` and the app's Settings to match.
 
 ---
 

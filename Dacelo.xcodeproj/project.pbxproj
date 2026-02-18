@@ -81,6 +81,13 @@
 			path = Store;
 			sourceTree = "<group>";
 		};
+		7A05C76D2F44FA2E0086850A /* AnalysisService */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = AnalysisService;
+			sourceTree = "<group>";
+		};
 		7A5D33202F4424BA00EB39F6 = {
 			isa = PBXGroup;
 			children = (
@@ -101,6 +108,7 @@
 		7A5D332B2F4424BA00EB39F6 /* Dacelo */ = {
 			isa = PBXGroup;
 			children = (
+				7A05C76D2F44FA2E0086850A /* AnalysisService */,
 				7A05C76B2F4435F20086850A /* Info.plist */,
 				7A05C7662F44308D0086850A /* Store */,
 				7A05C7542F4427F50086850A /* Network */,
