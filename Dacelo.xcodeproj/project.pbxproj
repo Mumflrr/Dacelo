@@ -10,6 +10,9 @@
 		7A05C7612F442E910086850A /* NetworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A05C7602F442E910086850A /* NetworkService.swift */; };
 		7A05C7652F4430480086850A /* Lc0Player.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A05C7642F4430480086850A /* Lc0Player.swift */; };
 		7A05C7682F44309B0086850A /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A05C7672F44309B0086850A /* AppStore.swift */; };
+		7A05C76F2F4561C40086850A /* MoveCritique.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A05C76E2F4561C40086850A /* MoveCritique.swift */; };
+		7A05C7712F4561D40086850A /* AnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A05C7702F4561D40086850A /* AnalysisService.swift */; };
+		7A05C7752F4562310086850A /* MoveHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A05C7742F4562310086850A /* MoveHistoryView.swift */; };
 		7A5D332D2F4424BA00EB39F6 /* DaceloApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5D332C2F4424BA00EB39F6 /* DaceloApp.swift */; };
 		7A5D332F2F4424BA00EB39F6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5D332E2F4424BA00EB39F6 /* ContentView.swift */; };
 		7A5D33332F4424BB00EB39F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7A5D33322F4424BB00EB39F6 /* Assets.xcassets */; };
@@ -22,6 +25,9 @@
 		7A05C7642F4430480086850A /* Lc0Player.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Lc0Player.swift; sourceTree = "<group>"; };
 		7A05C7672F44309B0086850A /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		7A05C76B2F4435F20086850A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		7A05C76E2F4561C40086850A /* MoveCritique.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoveCritique.swift; sourceTree = "<group>"; };
+		7A05C7702F4561D40086850A /* AnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisService.swift; sourceTree = "<group>"; };
+		7A05C7742F4562310086850A /* MoveHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoveHistoryView.swift; sourceTree = "<group>"; };
 		7A5D33292F4424BA00EB39F6 /* Dacelo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dacelo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A5D332C2F4424BA00EB39F6 /* DaceloApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaceloApp.swift; sourceTree = "<group>"; };
 		7A5D332E2F4424BA00EB39F6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -54,6 +60,7 @@
 			isa = PBXGroup;
 			children = (
 				7A5D332E2F4424BA00EB39F6 /* ContentView.swift */,
+				7A05C7742F4562310086850A /* MoveHistoryView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -84,6 +91,8 @@
 		7A05C76D2F44FA2E0086850A /* AnalysisService */ = {
 			isa = PBXGroup;
 			children = (
+				7A05C76E2F4561C40086850A /* MoveCritique.swift */,
+				7A05C7702F4561D40086850A /* AnalysisService.swift */,
 			);
 			path = AnalysisService;
 			sourceTree = "<group>";
@@ -206,9 +215,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7A05C76F2F4561C40086850A /* MoveCritique.swift in Sources */,
 				7A05C7652F4430480086850A /* Lc0Player.swift in Sources */,
 				7A5D332F2F4424BA00EB39F6 /* ContentView.swift in Sources */,
 				7A5D332D2F4424BA00EB39F6 /* DaceloApp.swift in Sources */,
+				7A05C7752F4562310086850A /* MoveHistoryView.swift in Sources */,
+				7A05C7712F4561D40086850A /* AnalysisService.swift in Sources */,
 				7A05C7682F44309B0086850A /* AppStore.swift in Sources */,
 				7A05C7612F442E910086850A /* NetworkService.swift in Sources */,
 			);

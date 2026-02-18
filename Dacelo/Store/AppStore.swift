@@ -1,5 +1,5 @@
 // AppStore.swift
-// LeelaChessApp
+// Dacelo
 
 import Chess
 import SwiftUI
@@ -24,10 +24,10 @@ final class AppStore: ObservableObject {
     @Published var analysis: AnalysisService
     @Published var chessStore: ChessStore
     @Published var gameMode: GameMode = .humanVsEngine
-    @Published var moveTimeMs: Int    = 3000
+    @Published var moveTimeMs: Int = 3000
 
     @AppStorage("serverHost") var serverHost: String = "your-pc-hostname"
-    @AppStorage("serverPort") var serverPort: Int    = 8765
+    @AppStorage("serverPort") var serverPort: Int = 8765
 
     private var cancellables: Set<AnyCancellable> = []
 
@@ -52,19 +52,17 @@ final class AppStore: ObservableObject {
         let (white, black, whiteBot, blackBot) = makePlayers(for: gameMode)
         let store = ChessStore(game: Chess.Game(white, against: black))
 
-        // Wire the store reference into any Lc0Robot instances so they can
-        // dispatch moves back via store.gameAction(.makeMove(move:))
         whiteBot?.store = store
         blackBot?.store = store
+        whiteBot?.analysisService = analysis
+        blackBot?.analysisService = analysis
 
-        // Give the network call enough time before the nil evalutate resign fires.
-        // responseDelay pauses the robot before calling evalutate, buying us time.
         let delaySeconds = Double(moveTimeMs) / 1000.0 + 1.0
         whiteBot?.responseDelay = delaySeconds
         blackBot?.responseDelay = delaySeconds
 
         chessStore = store
-        analysis.clearFeedback()
+        analysis.clearHistory()
         setupMoveObserver()
     }
 
@@ -80,7 +78,6 @@ final class AppStore: ObservableObject {
 
     // MARK: - Private
 
-    // Returns players plus optional Lc0Robot refs for post-init wiring.
     private func makePlayers(for mode: GameMode)
         -> (Chess.Player, Chess.Player, Lc0Robot?, Lc0Robot?) {
 
@@ -105,19 +102,38 @@ final class AppStore: ObservableObject {
     private func setupMoveObserver() {
         cancellables.removeAll()
 
-        // board.FEN is a computed String (uppercase) from Board+FEN.swift
         chessStore.$game
-            .map { $0.board.FEN }
-            .removeDuplicates()
+            .removeDuplicates { $0.board.FEN == $1.board.FEN }
             .dropFirst()
-            .sink { [weak self] fen in
+            .sink { [weak self] game in
                 guard let self else { return }
-                switch self.gameMode {
-                case .humanVsEngine, .humanVsHuman, .analysisOnly:
-                    self.analysis.analyse(fen: fen, movetime: 2000)
-                case .engineVsHuman:
-                    break
+                let fen = game.board.FEN
+                let fenParts = fen.split(separator: " ").map(String.init)
+
+                // The FEN's active color is who moves NEXT — so the mover is the opposite
+                let activeColor = fenParts.count > 1 ? fenParts[1] : "w"
+                let sideJustMoved = activeColor == "w" ? "black" : "white"
+
+                // Derive move number from FEN fullmove clock (field 6, 1-indexed)
+                // fullmove increments AFTER black's move
+                let fullMove = Int(fenParts.count > 5 ? fenParts[5] : "1") ?? 1
+                let moveLabel: String
+                if sideJustMoved == "white" {
+                    // White just moved — fullmove hasn't incremented yet
+                    moveLabel = "\(fullMove)."
+                } else {
+                    // Black just moved — fullmove already incremented
+                    moveLabel = "\(max(1, fullMove - 1))..."
                 }
+
+                // Single entry point for ALL move critique + live panel update.
+                // Lc0Player no longer calls recordMove — this observer handles both players.
+                self.analysis.recordMove(
+                    move: moveLabel,
+                    moveNotation: moveLabel,
+                    side: sideJustMoved,
+                    fen: fen
+                )
             }
             .store(in: &cancellables)
     }
