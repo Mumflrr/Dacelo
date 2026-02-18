@@ -2,11 +2,11 @@
 # Edit these values to match your setup.
 
 # Path to lc0.exe (download from https://github.com/LeelaChessZero/lc0/releases)
-lc0 = C:\lc0\lc0.exe
+lc0 = D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe
 
 # Optional: path to a weights file. Leave blank to use lc0's bundled default.
 # Download best nets from: https://lczero.org/play/networks/bestnets/
-weights =
+weights = D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb
 
 # WebSocket port your iOS/macOS app will connect to
 port = 8765
