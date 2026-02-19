@@ -49,17 +49,8 @@ final class AppStore: ObservableObject {
     func newGame(mode: GameMode? = nil) {
         if let mode { gameMode = mode }
 
-        let (white, black, whiteBot, blackBot) = makePlayers(for: gameMode)
+        let (white, black) = makePlayers(for: gameMode)
         let store = ChessStore(game: Chess.Game(white, against: black))
-
-        whiteBot?.store = store
-        blackBot?.store = store
-        whiteBot?.analysisService = analysis
-        blackBot?.analysisService = analysis
-
-        let delaySeconds = Double(moveTimeMs) / 1000.0 + 1.0
-        whiteBot?.responseDelay = delaySeconds
-        blackBot?.responseDelay = delaySeconds
 
         chessStore = store
         analysis.clearHistory()
@@ -78,23 +69,30 @@ final class AppStore: ObservableObject {
 
     // MARK: - Private
 
-    private func makePlayers(for mode: GameMode)
-        -> (Chess.Player, Chess.Player, Lc0Robot?, Lc0Robot?) {
-
+    private func makePlayers(for mode: GameMode) -> (Chess.Player, Chess.Player) {
         switch mode {
         case .humanVsEngine:
-            let bot = Lc0Robot(side: .black, network: network, moveTimeMs: moveTimeMs)
-            return (Chess.HumanPlayer(side: .white), bot, nil, bot)
+            let bot = Lc0Robot(
+                side: .black,
+                serverHost: serverHost,
+                serverPort: serverPort,
+                moveTimeMs: moveTimeMs
+            )
+            return (Chess.HumanPlayer(side: .white), bot)
 
         case .engineVsHuman:
-            let bot = Lc0Robot(side: .white, network: network, moveTimeMs: moveTimeMs)
-            return (bot, Chess.HumanPlayer(side: .black), bot, nil)
+            let bot = Lc0Robot(
+                side: .white,
+                serverHost: serverHost,
+                serverPort: serverPort,
+                moveTimeMs: moveTimeMs
+            )
+            return (bot, Chess.HumanPlayer(side: .black))
 
         case .humanVsHuman, .analysisOnly:
             return (
                 Chess.HumanPlayer(side: .white),
-                Chess.HumanPlayer(side: .black),
-                nil, nil
+                Chess.HumanPlayer(side: .black)
             )
         }
     }
@@ -115,19 +113,14 @@ final class AppStore: ObservableObject {
                 let sideJustMoved = activeColor == "w" ? "black" : "white"
 
                 // Derive move number from FEN fullmove clock (field 6, 1-indexed)
-                // fullmove increments AFTER black's move
                 let fullMove = Int(fenParts.count > 5 ? fenParts[5] : "1") ?? 1
                 let moveLabel: String
                 if sideJustMoved == "white" {
-                    // White just moved — fullmove hasn't incremented yet
                     moveLabel = "\(fullMove)."
                 } else {
-                    // Black just moved — fullmove already incremented
                     moveLabel = "\(max(1, fullMove - 1))..."
                 }
 
-                // Single entry point for ALL move critique + live panel update.
-                // Lc0Player no longer calls recordMove — this observer handles both players.
                 self.analysis.recordMove(
                     move: moveLabel,
                     moveNotation: moveLabel,

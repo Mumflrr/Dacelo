@@ -75,17 +75,27 @@ final class NetworkService: NSObject, ObservableObject {
     var serverHost: String = "your-pc-hostname"
     var serverPort: Int = 8765
 
+    // Exposed so Lc0Robot can build the URL on its background thread
+    var webSocketURL: URL? {
+        URL(string: "ws://\(serverHost):\(serverPort)")
+    }
+
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession!
 
-    // Each pending request gets a unique ID. Only the matching response
-    // resolves its continuation — ping/pong and stale responses are ignored.
     private struct PendingRequest {
         let id: String
-        let expectedTypes: Set<String>   // e.g. ["analysis"], ["engine_move"]
+        let expectedTypes: Set<String>
         let continuation: CheckedContinuation<Data, Error>
     }
     private var pendingRequests: [PendingRequest] = []
+
+    // Callback-based pending requests for use from non-async contexts (e.g. Lc0Robot)
+    private struct CallbackRequest {
+        let expectedTypes: Set<String>
+        let completion: (Data) -> Void
+    }
+    private var callbackRequests: [CallbackRequest] = []
 
     private var pingTimer: Timer?
 
@@ -98,7 +108,7 @@ final class NetworkService: NSObject, ObservableObject {
 
     func connect() {
         guard !isConnected else { return }
-        guard let url = URL(string: "ws://\(serverHost):\(serverPort)") else {
+        guard let url = webSocketURL else {
             lastError = "Invalid server URL: ws://\(serverHost):\(serverPort)"
             return
         }
@@ -117,6 +127,7 @@ final class NetworkService: NSObject, ObservableObject {
         isConnected = false
         let waiting = pendingRequests
         pendingRequests.removeAll()
+        callbackRequests.removeAll()
         waiting.forEach { $0.continuation.resume(throwing: Lc0ServerError.notConnected) }
     }
 
@@ -143,32 +154,38 @@ final class NetworkService: NSObject, ObservableObject {
                     self.lastError = error.localizedDescription
                     let waiting = self.pendingRequests
                     self.pendingRequests.removeAll()
+                    self.callbackRequests.removeAll()
                     waiting.forEach { $0.continuation.resume(throwing: error) }
                 }
             }
         }
     }
 
-    /// Routes an incoming message only to pending requests whose expectedTypes
-    /// match the response's "type" field. Pong and unknown types are silently dropped.
     private func routeIncomingMessage(_ data: Data) {
-        // Decode just the type field
         guard let partial = try? JSONDecoder().decode(TypeOnlyResponse.self, from: data) else {
             return
         }
 
         let responseType = partial.type
-
-        // Silently swallow pong and info messages — never deliver to pending
         guard responseType != "pong", responseType != "info" else { return }
 
-        // Find first pending request that accepts this response type
-        if let idx = pendingRequests.firstIndex(where: { $0.expectedTypes.contains(responseType)
-                                                          || responseType == "error" }) {
+        // Route to async continuation requests first
+        if let idx = pendingRequests.firstIndex(where: {
+            $0.expectedTypes.contains(responseType) || responseType == "error"
+        }) {
             let pending = pendingRequests.remove(at: idx)
             pending.continuation.resume(returning: data)
+            return
         }
-        // If no match, the message is dropped (e.g. a stale response after timeout)
+
+        // Route to callback-based requests (used by Lc0Robot from background thread)
+        if let idx = callbackRequests.firstIndex(where: {
+            $0.expectedTypes.contains(responseType) || responseType == "error"
+        }) {
+            let pending = callbackRequests.remove(at: idx)
+            pending.completion(data)
+            return
+        }
     }
 
     // MARK: - Keep-alive
@@ -179,13 +196,12 @@ final class NetworkService: NSObject, ObservableObject {
             guard let self else { return }
             Task { @MainActor [weak self] in
                 guard let self, self.isConnected else { return }
-                // Fire-and-forget: ping does NOT go through the pending queue
                 try? await self.sendJSON(["cmd": "ping"])
             }
         }
     }
 
-    // MARK: - Public API
+    // MARK: - Public async API (for AnalysisService)
 
     func analyse(fen: String, movetime: Int = 2000) async throws -> AnalysisResponse {
         guard isConnected else { throw Lc0ServerError.notConnected }
@@ -217,12 +233,55 @@ final class NetworkService: NSObject, ObservableObject {
         return result
     }
 
-    // MARK: - Private
+    // MARK: - Public callback API (for Lc0Robot background thread)
+    //
+    // Called from a background thread (the library's detached thread).
+    // Registers a callback completion handler, sends the JSON, and returns
+    // immediately. The completion fires when the response arrives on main.
+    // The caller blocks on a DispatchSemaphore until completion fires.
+
+    func sendEngineMove(jsonString: String, completion: @escaping (EngineMovesResponse) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isConnected else {
+                print("[NetworkService] sendEngineMove called while not connected")
+                completion(EngineMovesResponse(
+                    type: "error", move: nil, from: nil, to: nil,
+                    promotion: nil, score_cp: nil, score_mate: nil,
+                    pv: nil, message: "Not connected"
+                ))
+                return
+            }
+
+            // Register the callback before sending to avoid a race
+            let callbackRequest = CallbackRequest(
+                expectedTypes: ["engine_move"]
+            ) { data in
+                guard let result = try? JSONDecoder().decode(EngineMovesResponse.self, from: data) else {
+                    completion(EngineMovesResponse(
+                        type: "error", move: nil, from: nil, to: nil,
+                        promotion: nil, score_cp: nil, score_mate: nil,
+                        pv: nil, message: "Decode failed"
+                    ))
+                    return
+                }
+                completion(result)
+            }
+            self.callbackRequests.append(callbackRequest)
+
+            // Send the raw JSON string directly
+            self.webSocketTask?.send(.string(jsonString)) { error in
+                if let error {
+                    print("[NetworkService] WebSocket send error: \(error)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Private async helpers
 
     private func request(_ dict: [String: Any], expectedTypes: Set<String>) async throws -> Data {
         try await sendJSON(dict)
 
-        // Use a 20s timeout (longer than movetime) so we don't time out legitimate long thinks
         let timeoutSeconds: Double = 20
 
         return try await withThrowingTaskGroup(of: Data.self) { group in
