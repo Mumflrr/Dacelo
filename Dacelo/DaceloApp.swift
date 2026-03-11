@@ -1,23 +1,20 @@
-// LeelaChessApp.swift
-// LeelaChessApp
+// DaceloApp.swift
+// Dacelo
 
 import SwiftUI
 
 @main
 struct DaceloApp: App {
-    @StateObject private var appStore = AppStore()
+    @StateObject private var app = AppStore()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(appStore)
-                .onAppear {
-                    appStore.connectToServer()
-                }
+                .environmentObject(app)
+                .environmentObject(app.gameStore)
+                .environmentObject(app.analysis)
+                .environmentObject(app.settings)
+                .environmentObject(app.engineState)  // EngineConnectionState for UI
         }
-        #if os(macOS)
-        .windowStyle(.titleBar)
-        .windowResizability(.contentMinSize)
-        #endif
     }
 }
