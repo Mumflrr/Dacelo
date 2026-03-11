@@ -1,24 +1,43 @@
 @echo off
-:: lc0_tray.bat — Launcher for the lc0 System Tray Server
-:: Double-click this file, or right-click → Pin to Start / Pin to Taskbar
+:: lc0_tray.bat
+::
+:: Usage:
+::   lc0_tray.bat          -> start the tray app (server auto-starts silently)
+::   lc0_tray.bat --stop   -> stop the running server
+::
+:: To run on Windows startup:
+::   Win+R -> shell:startup -> put a shortcut to this .bat file there
 
-:: Navigate to the script directory
 cd /d "%~dp0"
 
-:: ── Option A: Conda environment (recommended) ─────────────────────────────
-:: Activate the lc0-server conda environment, then launch with pythonw
-:: (pythonw suppresses the console window)
-call conda activate lc0-server 2>nul
+:: ── Stop mode ────────────────────────────────────────────────────────────────
+if "%~1"=="--stop" (
+    python lc0_tray.py --stop
+    if errorlevel 1 (
+        echo Error stopping server.
+        pause
+    )
+    exit /b
+)
+
+:: ── Start mode ───────────────────────────────────────────────────────────────
+:: Try conda environment first, then plain pythonw, then python as last resort.
+:: pythonw suppresses the console window; python briefly shows one.
+
+where conda >nul 2>&1
+if not errorlevel 1 (
+    call conda activate lc0-server 2>nul
+    if not errorlevel 1 (
+        start "" pythonw lc0_tray.py
+        exit /b
+    )
+)
+
+where pythonw >nul 2>&1
 if not errorlevel 1 (
     start "" pythonw lc0_tray.py
     exit /b
 )
 
-:: ── Option B: Plain Python fallback ──────────────────────────────────────
-:: Used if conda is not installed or the environment doesn't exist yet.
-:: To create the environment first, run:
-::   conda env create -f environment.yaml
-start "" pythonw lc0_tray.py
-if errorlevel 1 (
-    start "" python lc0_tray.py
-)
+:: Fallback: regular python (console window will flash briefly then close)
+start "" python lc0_tray.py
