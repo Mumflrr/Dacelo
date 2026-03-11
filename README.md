@@ -72,7 +72,7 @@ LeelaChessApp/
 Using the provided Conda environment (recommended):
 
 ```powershell
-conda env create -f Windows/environment.yaml
+conda env create -f Windows/environment.yml
 conda activate lc0-server
 ```
 

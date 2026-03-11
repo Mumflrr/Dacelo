@@ -62,3 +62,7 @@ fastlane/screenshots/**/*.png
 fastlane/test_output
 
 **/*.DS_Store
+
+.vscode/
+
+windows/lc0_server.log

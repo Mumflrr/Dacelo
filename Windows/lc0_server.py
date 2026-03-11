@@ -66,7 +66,8 @@ class UCIEngine:
         self._loop = loop
         cmd = [self.lc0_path]
         if self.model_path:
-            cmd += ["--weights", self.model_path]
+            # lc0 requires weights passed in as weights='path/to/weights' (with = sign)
+            cmd.append(f"--weights={self.model_path}")
         log.info("Launching: %s", " ".join(cmd))
         self._proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
