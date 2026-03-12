@@ -2,8 +2,6 @@
 // Dacelo
 //
 // All response types decoded from the lc0 WebSocket server.
-// Kept separate so EngineService, AnalysisStore, and GameStore
-// can all import them without circular dependencies.
 
 import Foundation
 
@@ -36,7 +34,7 @@ struct AnalysisResponse: Decodable {
     let promotion: String?
     let score_cp: Int?
     let score_mate: Int?
-    let pv: [String]?
+    let pv: [String]?           // engine's top recommended line (up to 8 moves)
     let depth: Int?
     let nodes: Int?
     let feedback: String?
@@ -53,6 +51,7 @@ struct AlternativeMoveResponse: Decodable {
     let promotion: String?
     let score_cp: Int?
     let score_mate: Int?
+    let pv: [String]?           // full principal variation starting with this move
 }
 
 struct EngineMoveResponse: Decodable {

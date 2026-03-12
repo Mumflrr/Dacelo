@@ -1,6 +1,5 @@
 // MoveCritique.swift
 // Dacelo
-// Models/
 
 import Foundation
 import SwiftUI
@@ -46,9 +45,10 @@ enum MoveQuality: String, Codable {
 struct AlternativeMove: Codable, Identifiable {
     var id: Int { rank }
     let rank: Int
-    let move: String
+    let move: String        // UCI first move e.g. "e2e4"
     let scoreCP: Int?
     let scoreMate: Int?
+    let pv: [String]        // full principal variation (up to 8 UCI moves)
 }
 
 // MARK: - Move Critique
@@ -65,6 +65,7 @@ struct MoveCritique: Identifiable, Codable {
     let comment: String
     let alternatives: [AlternativeMove]
     let characteristics: PositionCharacteristics?
+    let suggestedLine: [String] // engine's top PV from this position (UCI moves)
 
     init(
         id: UUID = UUID(),
@@ -77,18 +78,20 @@ struct MoveCritique: Identifiable, Codable {
         classification: MoveQuality,
         comment: String,
         alternatives: [AlternativeMove],
-        characteristics: PositionCharacteristics?
+        characteristics: PositionCharacteristics?,
+        suggestedLine: [String]
     ) {
-        self.id             = id
-        self.moveNumber     = moveNumber
-        self.side           = side
-        self.move           = move
-        self.moveNotation   = moveNotation
-        self.scoreBefore    = scoreBefore
-        self.scoreAfter     = scoreAfter
-        self.classification = classification
-        self.comment        = comment
-        self.alternatives   = alternatives
+        self.id              = id
+        self.moveNumber      = moveNumber
+        self.side            = side
+        self.move            = move
+        self.moveNotation    = moveNotation
+        self.scoreBefore     = scoreBefore
+        self.scoreAfter      = scoreAfter
+        self.classification  = classification
+        self.comment         = comment
+        self.alternatives    = alternatives
         self.characteristics = characteristics
+        self.suggestedLine   = suggestedLine
     }
 }

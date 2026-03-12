@@ -1,33 +1,79 @@
 // MoveHistoryView.swift
 // Dacelo
-//
-// Modern move history with critique cards and characteristics
 
 import SwiftUI
 
-struct MoveHistoryView: View {
+// MARK: - Collapsible Move History Section
+// Drop this directly into the macOS sidebar List or the iOS ScrollView.
+
+struct MoveHistorySection: View {
     let critiques: [MoveCritique]
-    @State private var selectedMove: MoveCritique? = nil
-    
+    @State private var isExpanded: Bool = true
+    @State private var selectedID: UUID? = nil
+
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(critiques) { critique in
-                    MoveCard(critique: critique, isSelected: selectedMove?.id == critique.id)
+        VStack(alignment: .leading, spacing: 8) {
+
+            // ── Collapsible header ────────────────────────────────────────
+            Button {
+                withAnimation(.spring(response: 0.35)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "list.bullet.clipboard.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text("Move History")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .textCase(.uppercase)
+                        .tracking(1)
+                    Spacer()
+                    Text("\(critiques.count) moves")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.35))
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // ── Cards ─────────────────────────────────────────────────────
+            if isExpanded {
+                VStack(spacing: 8) {
+                    ForEach(critiques.reversed()) { critique in
+                        MoveCard(
+                            critique: critique,
+                            isSelected: selectedID == critique.id
+                        )
                         .onTapGesture {
                             withAnimation(.spring(response: 0.3)) {
-                                selectedMove = selectedMove?.id == critique.id ? nil : critique
+                                selectedID = selectedID == critique.id ? nil : critique.id
                             }
                         }
+                    }
                 }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .padding()
+        }
+    }
+}
+
+// MARK: - Standalone full-screen history (NavigationStack push / sheet)
+
+struct MoveHistoryView: View {
+    let critiques: [MoveCritique]
+
+    var body: some View {
+        ScrollView {
+            MoveHistorySection(critiques: critiques)
+                .padding()
         }
         .background(
             LinearGradient(
                 colors: [Color.black.opacity(0.9), Color.blue.opacity(0.1)],
-                startPoint: .top,
-                endPoint: .bottom
+                startPoint: .top, endPoint: .bottom
             )
             .ignoresSafeArea()
         )
@@ -44,58 +90,80 @@ struct MoveCard: View {
     let critique: MoveCritique
     let isSelected: Bool
     @State private var showAlternatives = false
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack(alignment: .top, spacing: 12) {
-                // Move number and piece icon
-                VStack(spacing: 4) {
-                    Text("\(critique.moveNumber)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    
-                    Text(critique.side == "white" ? "♔" : "♚")
-                        .font(.title2)
+        VStack(alignment: .leading, spacing: 10) {
+
+            // ── Header ────────────────────────────────────────────────────
+            HStack(alignment: .center, spacing: 12) {
+
+                // Side indicator — chess king glyph, white/dark coloring per side
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(critique.side == "white"
+                              ? Color.white.opacity(0.92)
+                              : Color(white: 0.08))
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Text(critique.side == "white" ? "♔" : "♚")
+                            .font(.system(size: 26))
+                            .foregroundStyle(critique.side == "white"
+                                             ? Color.black.opacity(0.8) : Color.white.opacity(0.9))
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: 52, height: 52)
                 }
-                .frame(width: 44, height: 44)
-                .background(
-                    Circle()
-                        .fill(critique.side == "white" ? .white.opacity(0.15) : .black.opacity(0.3))
-                )
-                
+                .frame(width: 52, height: 52)
+
+                // Move number + actual move
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(critique.moveNotation)
-                        .font(.title3.bold())
-                        .foregroundStyle(.white)
-                    
+                    HStack(alignment: .center, spacing: 4) {
+                        Text(critique.moveNotation)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                        // Show UCI move only if it's different from the notation label
+                        if !critique.move.isEmpty, critique.move != critique.moveNotation {
+                            Text(formatUCI(critique.move))
+                                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white)
+                        }
+                    }
                     QualityBadge(quality: critique.classification)
                 }
-                
+
                 Spacer()
-                
+
                 // Eval change
-                if let before = critique.scoreBefore,
-                   let after = critique.scoreAfter {
-                    EvalChangeIndicator(before: before, after: after)
+                if let before = critique.scoreBefore, let after = critique.scoreAfter {
+                    EvalChangeIndicator(before: before, after: after, side: critique.side)
                 }
             }
-            
-            // Comment
+
+            // ── Comment ───────────────────────────────────────────────────
             if !critique.comment.isEmpty {
                 Text(critique.comment)
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.8))
-                    .padding(.horizontal, 4)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            
-            // Position characteristics
+
+            // ── Engine's suggested line (non-excellent moves only) ────────
+            if critique.classification != .excellent,
+               critique.classification != .book,
+               !critique.suggestedLine.isEmpty {
+                EngineLineView(
+                    label: "Engine's best line",
+                    moves: critique.suggestedLine,
+                    accentColor: .blue
+                )
+            }
+
+            // ── Position characteristics ──────────────────────────────────
             if let chars = critique.characteristics {
                 CharacteristicsBadges(characteristics: chars)
-                    .padding(.top, 4)
             }
-            
-            // Alternatives (expandable)
+
+            // ── Alternatives ──────────────────────────────────────────────
             if !critique.alternatives.isEmpty {
                 AlternativesSection(
                     alternatives: critique.alternatives,
@@ -103,31 +171,30 @@ struct MoveCard: View {
                 )
             }
         }
-        .padding(16)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: 16)
                 .fill(.ultraThinMaterial)
-                .shadow(color: qualityColor(critique.classification).opacity(0.3),
-                       radius: isSelected ? 15 : 8,
-                       x: 0, y: isSelected ? 8 : 4)
+                .shadow(color: qualityColor(critique.classification).opacity(0.2),
+                        radius: isSelected ? 12 : 5,
+                        x: 0, y: isSelected ? 5 : 2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(
                     LinearGradient(
-                        colors: [qualityColor(critique.classification).opacity(0.5), .clear],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                        colors: [qualityColor(critique.classification).opacity(isSelected ? 0.7 : 0.35), .clear],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
                     ),
                     lineWidth: isSelected ? 2 : 1
                 )
         )
-        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .scaleEffect(isSelected ? 1.01 : 1.0)
         .animation(.spring(response: 0.3), value: isSelected)
     }
-    
-    private func qualityColor(_ quality: MoveQuality) -> Color {
-        switch quality {
+
+    private func qualityColor(_ q: MoveQuality) -> Color {
+        switch q {
         case .excellent:  return .green
         case .good:       return .blue
         case .inaccuracy: return .yellow
@@ -136,6 +203,14 @@ struct MoveCard: View {
         case .book:       return .purple
         case .unknown:    return .gray
         }
+    }
+
+    private func formatUCI(_ uci: String) -> String {
+        guard uci.count >= 4 else { return uci }
+        let from  = String(uci.prefix(2))
+        let to    = String(uci.dropFirst(2).prefix(2))
+        let promo = uci.count > 4 ? "=\(uci.suffix(1).uppercased())" : ""
+        return "\(from)→\(to)\(promo)"
     }
 }
 
@@ -143,160 +218,180 @@ struct MoveCard: View {
 
 struct QualityBadge: View {
     let quality: MoveQuality
-    
+
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption2.weight(.bold))
-            Text(quality.rawValue)
-                .font(.caption.weight(.semibold))
+            Image(systemName: quality.icon).font(.caption2.weight(.bold))
+            Text(quality.rawValue).font(.caption.weight(.semibold))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(
-            Capsule()
-                .fill(color.opacity(0.2))
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(color.opacity(0.5), lineWidth: 1)
-        )
-        .foregroundStyle(color)
-    }
-    
-    private var color: Color {
-        switch quality {
-        case .excellent:  return .green
-        case .good:       return .blue
-        case .inaccuracy: return .yellow
-        case .mistake:    return .orange
-        case .blunder:    return .red
-        case .book:       return .purple
-        case .unknown:    return .gray
-        }
-    }
-    
-    private var icon: String {
-        switch quality {
-        case .excellent:  return "star.fill"
-        case .good:       return "checkmark.circle.fill"
-        case .inaccuracy: return "exclamationmark.triangle.fill"
-        case .mistake:    return "xmark.circle.fill"
-        case .blunder:    return "flame.fill"
-        case .book:       return "book.fill"
-        case .unknown:    return "questionmark.circle"
-        }
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Capsule().fill(quality.color.opacity(0.2)))
+        .overlay(Capsule().strokeBorder(quality.color.opacity(0.5), lineWidth: 1))
+        .foregroundStyle(quality.color)
     }
 }
 
 // MARK: - Eval Change Indicator
+// Shows score AFTER the move, with a delta arrow showing how much changed.
+// Delta sign is from the mover's perspective: green = improved for mover.
 
 struct EvalChangeIndicator: View {
     let before: Int
     let after: Int
-    
+    let side: String   // "white" | "black"
+
+    // From mover's perspective: positive = they improved their position
+    private var moverDelta: Int {
+        side == "white" ? (after - before) : (before - after)
+    }
+
+    private var deltaColor: Color {
+        moverDelta > 5 ? .green : moverDelta < -5 ? .red : .gray
+    }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            Text(formatScore(after))
-                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundStyle(scoreColor(after))
-            
+            Text(String(format: "%+.2f", Double(after) / 100.0))
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(after > 0 ? .green : after < 0 ? .red : .gray)
             HStack(spacing: 2) {
-                Image(systemName: arrow)
-                    .font(.caption2)
-                    .foregroundStyle(changeColor)
-                Text(formatDelta)
+                Image(systemName: moverDelta > 5 ? "arrow.up.right"
+                                : moverDelta < -5 ? "arrow.down.right" : "arrow.right")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(String(format: "%+.2f", Double(moverDelta) / 100.0))
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(changeColor)
+            }
+            .foregroundStyle(deltaColor)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.ultraThinMaterial))
+    }
+}
+
+// MARK: - Engine Line View
+
+struct EngineLineView: View {
+    let label: String
+    let moves: [String]
+    let accentColor: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption2.weight(.semibold))
+                Text(label)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(accentColor)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(Array(moves.prefix(8).enumerated()), id: \.offset) { idx, uci in
+                        Text(formatUCI(uci))
+                            .font(.system(.caption, design: .monospaced).weight(.medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(.horizontal, 7).padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(accentColor.opacity(idx == 0 ? 0.3 : 0.1))
+                            )
+                        if idx < min(moves.count, 8) - 1 {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.25))
+                        }
+                    }
+                    if moves.count > 8 {
+                        Text("…").font(.caption).foregroundStyle(.white.opacity(0.4))
+                    }
+                }
+                .padding(.vertical, 1)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.ultraThinMaterial)
-        )
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(accentColor.opacity(0.08)))
     }
-    
-    private var delta: Int { after - before }
-    
-    private var formatDelta: String {
-        String(format: "%+.2f", Double(abs(delta)) / 100.0)
-    }
-    
-    private func formatScore(_ score: Int) -> String {
-        String(format: "%+.2f", Double(score) / 100.0)
-    }
-    
-    private func scoreColor(_ score: Int) -> Color {
-        score > 0 ? .green : score < 0 ? .red : .gray
-    }
-    
-    private var changeColor: Color {
-        delta > 0 ? .green : delta < 0 ? .red : .gray
-    }
-    
-    private var arrow: String {
-        delta > 0 ? "arrow.up.right" : delta < 0 ? "arrow.down.right" : "arrow.right"
+
+    private func formatUCI(_ uci: String) -> String {
+        guard uci.count >= 4 else { return uci }
+        let from  = String(uci.prefix(2))
+        let to    = String(uci.dropFirst(2).prefix(2))
+        let promo = uci.count > 4 ? "=\(uci.suffix(1).uppercased())" : ""
+        return "\(from)→\(to)\(promo)"
     }
 }
 
 // MARK: - Characteristics Badges
+// Two rows of two badges so nothing gets clipped in a narrow sidebar.
 
 struct CharacteristicsBadges: View {
     let characteristics: PositionCharacteristics
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Badge(
-                    text: characteristics.sharpness,
-                    icon: "flame.fill",
-                    color: sharpnessColor
-                )
-                
-                Badge(
-                    text: characteristics.difficulty,
-                    icon: difficultyIcon,
-                    color: .blue
-                )
-                
-                Badge(
-                    text: characteristics.margin_for_error,
-                    icon: "target",
-                    color: .purple
-                )
+        VStack(alignment: .leading, spacing: 6) {
+            // Row 1: sharpness + difficulty
+            HStack(spacing: 6) {
+                Badge(text: characteristics.sharpness,  icon: "flame.fill",   color: sharpnessColor)
+                Badge(text: characteristics.difficulty, icon: difficultyIcon, color: difficultyColor)
             }
-            
+            // Row 2: margin + line type
+            HStack(spacing: 6) {
+                Badge(text: characteristics.margin_for_error, icon: "target",   color: marginColor)
+                Badge(text: characteristics.line_type,        icon: lineIcon,   color: .purple)
+            }
+            // Explanation
             Text(characteristics.explanation)
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(.white.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
+                .lineSpacing(2)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.black.opacity(0.2))
-        )
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.2)))
     }
-    
+
     private var sharpnessColor: Color {
         switch characteristics.sharpness {
         case "Sharp":    return .red
         case "Tactical": return .orange
         case "Balanced": return .blue
-        case "Quiet":    return .green
-        default:         return .gray
+        default:         return .green
         }
     }
-    
+
+    private var difficultyColor: Color {
+        switch characteristics.difficulty {
+        case "Expert":       return .red
+        case "Advanced":     return .orange
+        case "Intermediate": return .yellow
+        default:             return .green
+        }
+    }
+
+    private var marginColor: Color {
+        switch characteristics.margin_for_error {
+        case "Narrow":   return .red
+        case "Moderate": return .orange
+        default:         return .green
+        }
+    }
+
     private var difficultyIcon: String {
         switch characteristics.difficulty {
-        case "Beginner":     return "1.circle.fill"
-        case "Intermediate": return "2.circle.fill"
-        case "Advanced":     return "3.circle.fill"
         case "Expert":       return "star.circle.fill"
-        default:             return "circle.fill"
+        case "Advanced":     return "3.circle.fill"
+        case "Intermediate": return "2.circle.fill"
+        default:             return "1.circle.fill"
+        }
+    }
+
+    private var lineIcon: String {
+        switch characteristics.line_type {
+        case "Forcing":    return "bolt.fill"
+        case "Committal":  return "arrow.right.circle.fill"
+        case "Flexible":   return "arrow.triangle.branch"
+        default:           return "tortoise.fill"
         }
     }
 }
@@ -305,20 +400,15 @@ struct Badge: View {
     let text: String
     let icon: String
     let color: Color
-    
+
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption2)
-            Text(text)
-                .font(.caption2.weight(.medium))
+            Image(systemName: icon).font(.caption2.weight(.semibold))
+            Text(text).font(.caption.weight(.medium))
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            Capsule()
-                .fill(color.opacity(0.15))
-        )
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Capsule().fill(color.opacity(0.15)))
+        .overlay(Capsule().strokeBorder(color.opacity(0.3), lineWidth: 1))
         .foregroundStyle(color)
     }
 }
@@ -328,107 +418,123 @@ struct Badge: View {
 struct AlternativesSection: View {
     let alternatives: [AlternativeMove]
     @Binding var isExpanded: Bool
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.spring(response: 0.3)) {
-                    isExpanded.toggle()
-                }
+                withAnimation(.spring(response: 0.3)) { isExpanded.toggle() }
             } label: {
                 HStack {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.bold))
-                    Text("Alternative Moves")
+                    Text("Alternative Lines")
                         .font(.caption.weight(.semibold))
                     Spacer()
                     Text("\(alternatives.count)")
                         .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(.white.opacity(0.2)))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(.white.opacity(0.15)))
                 }
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(.white.opacity(0.85))
             }
             .buttonStyle(.plain)
-            
+
             if isExpanded {
-                VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     ForEach(alternatives) { alt in
-                        HStack {
-                            Circle()
-                                .fill(rankColor(alt.rank))
-                                .frame(width: 20, height: 20)
-                                .overlay(
-                                    Text("\(alt.rank)")
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundStyle(.white)
-                                )
-                            
-                            Text(alt.move)
-                                .font(.system(.caption, design: .monospaced).weight(.medium))
-                                .foregroundStyle(.white)
-                            
-                            Spacer()
-                            
-                            if let cp = alt.scoreCP {
-                                Text(String(format: "%+.2f", Double(cp) / 100.0))
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(cp > 0 ? .green : cp < 0 ? .red : .gray)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(.black.opacity(0.2))
-                        )
+                        AlternativeLineRow(alt: alt)
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.black.opacity(0.15))
-        )
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.15)))
     }
-    
-    private func rankColor(_ rank: Int) -> Color {
-        switch rank {
-        case 1: return .yellow
-        case 2: return .gray
-        case 3: return .brown
-        default: return .blue
+}
+
+// MARK: - Alternative Line Row
+
+struct AlternativeLineRow: View {
+    let alt: AlternativeMove
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Circle()
+                    .fill(rankColor(alt.rank))
+                    .frame(width: 22, height: 22)
+                    .overlay(
+                        Text("\(alt.rank)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                    )
+                Text(formatUCI(alt.move))
+                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                if let cp = alt.scoreCP {
+                    Text(String(format: "%+.2f", Double(cp) / 100.0))
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(cp > 0 ? .green : cp < 0 ? .red : .gray)
+                } else if let mate = alt.scoreMate {
+                    Text(mate > 0 ? "M\(mate)" : "-M\(abs(mate))")
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(.purple)
+                }
+            }
+
+            if !alt.pv.isEmpty {
+                EngineLineView(label: "Line", moves: alt.pv, accentColor: rankColor(alt.rank))
+            }
         }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.2)))
+    }
+
+    private func rankColor(_ r: Int) -> Color {
+        switch r { case 1: return .yellow; case 2: return .gray; default: return .brown }
+    }
+
+    private func formatUCI(_ uci: String) -> String {
+        guard uci.count >= 4 else { return uci }
+        let from  = String(uci.prefix(2))
+        let to    = String(uci.dropFirst(2).prefix(2))
+        let promo = uci.count > 4 ? "=\(uci.suffix(1).uppercased())" : ""
+        return "\(from)→\(to)\(promo)"
     }
 }
 
 #Preview {
     NavigationStack {
-        MoveHistoryView(critiques: [
-            MoveCritique(
-                moveNumber: 1,
-                side: "white",
-                move: "e2e4",
-                moveNotation: "e4",
-                scoreBefore: 20,
-                scoreAfter: 35,
-                classification: .excellent,
-                comment: "Best move!",
-                alternatives: [
-                    AlternativeMove(rank: 1, move: "e2e4", scoreCP: 35, scoreMate: nil),
-                    AlternativeMove(rank: 2, move: "d2d4", scoreCP: 28, scoreMate: nil)
-                ],
-                characteristics: PositionCharacteristics(
-                    sharpness: "Tactical",
-                    difficulty: "Intermediate",
-                    margin_for_error: "Moderate",
-                    line_type: "Flexible",
-                    explanation: "Several decent moves with tactical possibilities."
+        ScrollView {
+            MoveHistorySection(critiques: [
+                MoveCritique(
+                    moveNumber: 1, side: "white", move: "e2e4", moveNotation: "1.",
+                    scoreBefore: 20, scoreAfter: 35, classification: .excellent,
+                    comment: "Best move! The engine agrees this is the top choice.",
+                    alternatives: [
+                        AlternativeMove(rank: 1, move: "d2d4", scoreCP: 28, scoreMate: nil,
+                                       pv: ["d2d4", "g8f6", "c2c4", "e7e6", "g1f3"]),
+                    ],
+                    characteristics: PositionCharacteristics(
+                        sharpness: "Balanced", difficulty: "Beginner",
+                        margin_for_error: "Forgiving", line_type: "Flexible",
+                        explanation: "Engine rates this +0.35 pawns in White's favour. Several moves are nearly equal."
+                    ),
+                    suggestedLine: ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
+                ),
+                MoveCritique(
+                    moveNumber: 1, side: "black", move: "e7e5", moveNotation: "1...",
+                    scoreBefore: 35, scoreAfter: 13, classification: .good,
+                    comment: "Good move — only 22cp from optimal.",
+                    alternatives: [],
+                    characteristics: nil,
+                    suggestedLine: []
                 )
-            )
-        ])
+            ])
+            .padding()
+        }
+        .background(Color.black.opacity(0.9).ignoresSafeArea())
     }
 }
