@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 # ── Configuration — edit these lines ─────────────────────────────────────────
 LC0_EXE     = Path(__file__).parent / r"lc0\lc0.exe"
-LC0_WEIGHTS = Path(__file__).parent / r"BT4-332.pb"
+LC0_WEIGHTS = Path(__file__).parent / r"lc0\BT4-332.pb"
 LC0_PORT    = 8765
 LC0_THREADS = 4
 # ─────────────────────────────────────────────────────────────────────────────

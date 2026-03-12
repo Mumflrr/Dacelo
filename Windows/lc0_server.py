@@ -11,12 +11,8 @@ UCI flow (per lc0 docs https://lczero.org/dev/wiki/getting-started/):
   7. "go movetime <ms>"
   8. lc0 streams "info ..." lines then "bestmove <move>"
 
-Bugs fixed vs previous version:
-  - score_to_feedback: lc0 reports score from side-to-move perspective,
-    not always White. We now normalise before generating text.
-  - bestmove (none): game-over edge case no longer crashes the client.
-  - ucinewgame: new "new_game" WebSocket command clears lc0's hash.
-  - MultiPV info parsing: depth/nodes are updated inside _parse_info correctly.
+Stop the server:
+  Ctrl+C in the terminal, or type "quit" + Enter in the terminal.
 """
 
 import asyncio
@@ -66,7 +62,6 @@ class UCIEngine:
         self._loop = loop
         cmd = [self.lc0_path]
         if self.model_path:
-            # lc0 requires weights passed in as weights='path/to/weights' (with = sign)
             cmd.append(f"--weights={self.model_path}")
         log.info("Launching: %s", " ".join(cmd))
         self._proc = subprocess.Popen(
@@ -75,6 +70,19 @@ class UCIEngine:
         )
         threading.Thread(target=self._reader, daemon=True).start()
         self._send("uci")
+
+    def stop(self):
+        if self._proc:
+            try:
+                self._send("quit")
+            except Exception:
+                pass
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+            self._proc = None
+            log.info("lc0 process stopped.")
 
     def _send(self, line: str):
         if self._proc and self._proc.stdin:
@@ -122,17 +130,15 @@ class UCIEngine:
         """
         Analyse FEN with MultiPV. Caller MUST hold Lc0Server._engine_lock.
         """
-        # Drain any stale output from previous commands
         while not self._queue.empty():
             self._queue.get_nowait()
 
         self._send(f"position fen {fen}")
         self._send(f"go movetime {movetime_ms}")
 
-        mpv: dict[int, dict] = {}    # slot → {score_cp, score_mate, pv, move}
+        mpv: dict[int, dict] = {}
         best_depth = 0
         best_nodes = 0
-        # Generous timeout: movetime + 15s for MultiPV overhead
         timeout = (movetime_ms / 1000.0) + 15.0
 
         while True:
@@ -145,7 +151,6 @@ class UCIEngine:
 
             if line.startswith("info"):
                 parts = line.split()
-                # depth and nodes are global (not per-slot)
                 try:
                     if "depth" in parts:
                         d = int(parts[parts.index("depth") + 1])
@@ -163,7 +168,6 @@ class UCIEngine:
     def _parse_info(self, line: str, mpv: dict):
         parts = line.split()
 
-        # Which multipv slot? Omitted = slot 1 (when MultiPV=1)
         slot = 1
         if "multipv" in parts:
             try:
@@ -177,9 +181,8 @@ class UCIEngine:
         try:
             if "score" in parts:
                 si   = parts.index("score")
-                kind = parts[si + 1]   # "cp" or "mate"
+                kind = parts[si + 1]
                 val  = int(parts[si + 2])
-                # lc0 may append "lowerbound"/"upperbound" — safely ignored
                 if kind == "cp":
                     mpv[slot]["score_cp"]   = val
                     mpv[slot]["score_mate"] = None
@@ -201,97 +204,110 @@ class UCIEngine:
         parts    = bestmove_line.split()
         bestmove = parts[1] if len(parts) > 1 else None
 
-        # Guard: "bestmove (none)" means no legal moves (game over)
         if bestmove == "(none)":
             bestmove = None
 
         slot1 = mpv.get(1, {})
 
         alternatives = []
-        for slot_num in sorted(mpv.keys()):
-            s    = mpv[slot_num]
-            move = s.get("move")
-            if not move:
-                continue
-            from_sq, to_sq, promo = uci_to_parts(move)
-            alternatives.append({
-                "rank":       slot_num,
-                "move":       move,
-                "from":       from_sq,
-                "to":         to_sq,
-                "promotion":  promo,
-                "score_cp":   s.get("score_cp"),
-                "score_mate": s.get("score_mate"),
-            })
+        for s in range(2, MULTI_PV + 1):
+            sl = mpv.get(s, {})
+            if sl.get("move"):
+                alternatives.append({
+                    "move":       sl["move"],
+                    "score_cp":   sl.get("score_cp"),
+                    "score_mate": sl.get("score_mate"),
+                    "pv":         sl.get("pv", [])[:5],
+                })
+
+        chars = None
+        if slot1.get("score_cp") is not None and alternatives:
+            chars = position_characteristics(
+                slot1["score_cp"],
+                alternatives[0].get("score_cp"),
+                slot1.get("pv", []),
+            )
 
         return {
-            "bestmove":        bestmove,
-            "score_cp":        slot1.get("score_cp"),
-            "score_mate":      slot1.get("score_mate"),
-            "pv":              slot1.get("pv", []),
-            "depth":           depth,
-            "nodes":           nodes,
-            "alternatives":    alternatives,
-            "characteristics": calculate_characteristics(mpv),
+            "bestmove":       bestmove,
+            "score_cp":       slot1.get("score_cp"),
+            "score_mate":     slot1.get("score_mate"),
+            "pv":             slot1.get("pv", []),
+            "depth":          depth,
+            "nodes":          nodes,
+            "alternatives":   alternatives,
+            "characteristics": chars,
         }
 
     async def get_engine_move(self, fen: str, movetime_ms: int = 3000) -> dict:
-        """Best move for the engine to play. Caller MUST hold _engine_lock."""
-        return await self.analyse(fen, movetime_ms)
+        while not self._queue.empty():
+            self._queue.get_nowait()
 
-    def stop(self):
-        if self._proc:
+        self._send(f"position fen {fen}")
+        self._send(f"go movetime {movetime_ms}")
+
+        best_depth = 0
+        best_nodes = 0
+        timeout = (movetime_ms / 1000.0) + 15.0
+
+        while True:
             try:
-                self._send("quit")
-                self._proc.wait(timeout=3)
-            except Exception:
-                self._proc.kill()
-            log.info("lc0 stopped")
+                line = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                log.error("Timeout waiting for engine move (fen=%s)", fen)
+                self._send("stop")
+                raise
+
+            if line.startswith("info"):
+                parts = line.split()
+                try:
+                    if "depth" in parts:
+                        d = int(parts[parts.index("depth") + 1])
+                        if d > best_depth:
+                            best_depth = d
+                    if "nodes" in parts:
+                        best_nodes = int(parts[parts.index("nodes") + 1])
+                except (ValueError, IndexError):
+                    pass
+
+            elif line.startswith("bestmove"):
+                parts    = line.split()
+                bestmove = parts[1] if len(parts) > 1 else None
+                if bestmove == "(none)":
+                    bestmove = None
+                return {
+                    "bestmove":   bestmove,
+                    "score_cp":   None,
+                    "score_mate": None,
+                    "pv":         [],
+                    "depth":      best_depth,
+                    "nodes":      best_nodes,
+                }
 
 
 # ── Position Characteristics ──────────────────────────────────────────────────
 
-def calculate_characteristics(mpv: dict) -> dict:
-    """
-    Compute position sharpness/difficulty from the evaluation gap between
-    slots 1 and 2 (best vs 2nd-best move).
+def position_characteristics(
+    best_cp: int,
+    second_cp: Optional[int],
+    pv: list,
+) -> dict:
+    margin     = (best_cp - second_cp) if second_cp is not None else 0
+    sharpness  = min(10, max(0, round(abs(best_cp) / 100)))
+    difficulty = min(10, max(0, round(margin / 50))) if second_cp is not None else 5
 
-    lc0 scores are always from the side-to-move's perspective, so the
-    gap between slots is meaningful regardless of whose turn it is.
-    """
-    s1 = mpv.get(1, {}).get("score_cp")
-    s2 = mpv.get(2, {}).get("score_cp")
-
-    if s1 is None or s2 is None:
-        return {
-            "sharpness": "Balanced", "difficulty": "Intermediate",
-            "margin_for_error": "Moderate", "line_type": "Flexible",
-            "explanation": "Position requires standard play.",
-        }
-
-    gap = abs(s1 - s2) / 100.0   # centipawns → pawns
-
-    sharpness  = ("Sharp"    if gap > 1.5 else "Tactical"     if gap > 0.5
-                  else "Balanced" if gap > 0.2 else "Quiet")
-    difficulty = ("Expert"   if gap < 0.1 else "Advanced"     if gap < 0.3
-                  else "Intermediate" if gap < 0.8 else "Beginner")
-    margin     = ("Narrow"   if gap > 1.0 else "Moderate"     if gap > 0.3
-                  else "Forgiving")
-    line_type  = ("Forcing"  if gap > 1.5 else "Committal"    if gap > 0.8
-                  else "Flexible" if gap > 0.2 else "Quiet")
+    if margin > 150:
+        line_type = "Forcing"
+    elif abs(best_cp) > 200:
+        line_type = "Committal"
+    elif len(pv) > 5:
+        line_type = "Flexible"
+    else:
+        line_type = "Quiet"
 
     sentences = [
-        {"Sharp": "Only one good move — critical position.",
-         "Tactical": "Accuracy matters; some moves are clearly better.",
-         "Balanced": "Multiple reasonable options available.",
-         "Quiet": "Many moves are roughly equal."}[sharpness],
-        {"Expert": "Requires deep calculation.",
-         "Advanced": "Subtle differences demand careful study.",
-         "Intermediate": "Best move is findable with focused thought.",
-         "Beginner": "The best move stands out clearly."}[difficulty],
-        {"Narrow":    f"Only the best move maintains the advantage (gap: {gap:.2f}p).",
-         "Moderate":  "Best move preferred, but alternatives are viable.",
-         "Forgiving": "Several moves keep the advantage."}[margin],
+        f"Sharpness: {sharpness}/10.",
+        f"Difficulty: {difficulty}/10.",
         {"Forcing":   "Forces the opponent into a narrow reply.",
          "Committal": "Creates imbalances — commits to a clear plan.",
          "Flexible":  "Keeps options open for follow-up play.",
@@ -311,15 +327,7 @@ def calculate_characteristics(mpv: dict) -> dict:
 
 def score_to_feedback(score_cp: Optional[int], score_mate: Optional[int],
                       side_to_move: str = "w") -> str:
-    """
-    Human-readable eval string.
-
-    lc0 reports scores from the side-to-move's perspective (positive = side
-    to move is better). We normalise to White's perspective so "positive =
-    White is better" in the output text.
-    """
     if score_mate is not None:
-        # Positive mate = side to move has mate
         if side_to_move == "w":
             winner = "White" if score_mate > 0 else "Black"
         else:
@@ -331,7 +339,6 @@ def score_to_feedback(score_cp: Optional[int], score_mate: Optional[int],
     if score_cp is None:
         return "Position is unclear."
 
-    # Normalise to White's perspective
     cp = score_cp / 100.0
     if side_to_move == "b":
         cp = -cp
@@ -360,7 +367,6 @@ class Lc0Server:
         self.host   = host
         self.port   = port
         self._clients: set = set()
-        # Single lock — lc0 is single-threaded; never run two searches at once.
         self._engine_lock = asyncio.Lock()
 
     async def handle(self, ws):
@@ -386,8 +392,6 @@ class Lc0Server:
             await ws.send(json.dumps({"type": "pong"}))
 
         elif cmd == "new_game":
-            # Clears lc0 hash — safe to call without holding the lock
-            # since new_game is fired between searches, never during one.
             self.engine.new_game()
             await ws.send(json.dumps({"type": "new_game_ok"}))
 
@@ -464,41 +468,74 @@ class Lc0Server:
     async def run(self):
         log.info("WebSocket server on ws://%s:%d", self.host, self.port)
         async with websockets.serve(self.handle, self.host, self.port):
-            log.info("Server live — waiting for connections")
+            log.info("Server live — waiting for connections  (Ctrl+C or type 'quit' to stop)")
             await asyncio.Future()
+
+
+# ── stdin "quit" listener ─────────────────────────────────────────────────────
+
+def _stdin_quit_watcher(loop: asyncio.AbstractEventLoop):
+    """
+    Runs in a background thread. Lets you type 'quit' + Enter to stop the server
+    when running in a visible terminal window.
+    """
+    try:
+        for line in sys.stdin:
+            if line.strip().lower() in ("quit", "exit", "q"):
+                log.info("Quit command received — shutting down.")
+                loop.call_soon_threadsafe(loop.stop)
+                break
+    except Exception:
+        pass
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser(description="lc0 WebSocket Bridge")
-    p.add_argument("--lc0",     default=r"C:\lc0\lc0.exe", help="Path to lc0.exe")
-    p.add_argument("--weights", default=None,               help="Path to weights (.pb.gz)")
-    p.add_argument("--port",    type=int, default=8765,     help="WebSocket port")
-    p.add_argument("--host",    default="0.0.0.0",          help="Bind address")
-    p.add_argument("--threads", type=int, default=4,        help="UCI Threads option")
+    p.add_argument("--lc0",     default=r"lc0\lc0.exe",        help="Path to lc0.exe")
+    p.add_argument("--weights", default=r"lc0\BT4-332.pb",     help="Path to weights (.pb)")
+    p.add_argument("--port",    type=int, default=8765,         help="WebSocket port")
+    p.add_argument("--host",    default="0.0.0.0",              help="Bind address")
+    p.add_argument("--threads", type=int, default=4,            help="UCI Threads option")
     return p.parse_args()
 
 
 async def main():
     args   = parse_args()
-    engine = UCIEngine(lc0_path=args.lc0, model_path=args.weights)
+
+    # Log the resolved paths so you can confirm they're correct at startup
+    lc0_path     = os.path.abspath(args.lc0)
+    weights_path = os.path.abspath(args.weights)
+    log.info("lc0 exe     : %s  (exists=%s)", lc0_path,     os.path.exists(lc0_path))
+    log.info("weights     : %s  (exists=%s)", weights_path, os.path.exists(weights_path))
+    log.info("port        : %d", args.port)
+    log.info("threads     : %d", args.threads)
+
+    engine = UCIEngine(lc0_path=lc0_path, model_path=weights_path)
     loop   = asyncio.get_running_loop()
     engine.start(loop)
+
+    # Start the stdin "quit" watcher in a background thread
+    threading.Thread(target=_stdin_quit_watcher, args=(loop,), daemon=True).start()
 
     log.info("Waiting for UCI handshake …")
     await engine.wait_ready()
 
-    # setoption must come after readyok, before any position/go
     engine.set_option("Threads", str(args.threads))
     engine.set_option("MultiPV",  str(MULTI_PV))
 
     server = Lc0Server(engine, host=args.host, port=args.port)
     try:
         await server.run()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.info("Shutting down…")
     finally:
         engine.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Stopped by Ctrl+C.")

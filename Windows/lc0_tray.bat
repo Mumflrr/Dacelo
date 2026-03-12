@@ -2,7 +2,7 @@
 :: lc0_tray.bat
 ::
 :: Usage:
-::   lc0_tray.bat          -> start the tray app (server auto-starts silently)
+::   lc0_tray.bat          -> start the tray app (server visible in terminal)
 ::   lc0_tray.bat --stop   -> stop the running server
 ::
 :: To run on Windows startup:
@@ -20,24 +20,28 @@ if "%~1"=="--stop" (
     exit /b
 )
 
-:: ── Start mode ───────────────────────────────────────────────────────────────
-:: Try conda environment first, then plain pythonw, then python as last resort.
-:: pythonw suppresses the console window; python briefly shows one.
+:: ── Start mode (debug: visible terminal window) ───────────────────────────────
+:: Runs lc0_server.py directly so you can see all output.
+:: Press Ctrl+C or type "quit" to stop.
 
 where conda >nul 2>&1
 if not errorlevel 1 (
     call conda activate lc0-server 2>nul
     if not errorlevel 1 (
-        start "" pythonw lc0_tray.py
+        python lc0_server.py ^
+            --lc0=lc0\lc0.exe ^
+            --weights=lc0\BT4-332.pb ^
+            --port=8765 ^
+            --threads=4
+        pause
         exit /b
     )
 )
 
-where pythonw >nul 2>&1
-if not errorlevel 1 (
-    start "" pythonw lc0_tray.py
-    exit /b
-)
+python lc0_server.py ^
+    --lc0=lc0\lc0.exe ^
+    --weights=lc0\BT4-332.pb ^
+    --port=8765 ^
+    --threads=4
 
-:: Fallback: regular python (console window will flash briefly then close)
-start "" python lc0_tray.py
+pause
