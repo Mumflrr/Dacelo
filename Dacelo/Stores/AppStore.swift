@@ -1,6 +1,5 @@
 // AppStore.swift
 // Dacelo
-// Stores/
 
 import SwiftUI
 import Combine
@@ -16,17 +15,13 @@ final class AppStore: ObservableObject {
     let analysis:    AnalysisStore
 
     // MARK: - Init
-    // Order matters:
-    //   1. AppSettings and EngineConnectionState are @MainActor — create first
-    //   2. EngineService (actor) receives state as a parameter — no MainActor init call inside actor
-    //   3. GameStore and AnalysisStore depend on engine
 
     init() {
-        let s     = AppSettings()
-        let eState = EngineConnectionState()   // created here on MainActor ✓
-        let eng   = EngineService(host: s.serverHost, port: s.serverPort, state: eState)
-        let game  = GameStore(engine: eng, settings: s)
-        let ana   = AnalysisStore(engine: eng)
+        let s      = AppSettings()
+        let eState = EngineConnectionState()
+        let eng    = EngineService(host: s.serverHost, port: s.serverPort, state: eState)
+        let game   = GameStore(engine: eng, settings: s)
+        let ana    = AnalysisStore(engine: eng)
 
         self.settings    = s
         self.engineState = eState
@@ -52,8 +47,10 @@ final class AppStore: ObservableObject {
 
     // MARK: - New Game
 
-    func newGame(mode: GameMode? = nil) {
-        gameStore.newGame(mode: mode)
+    func newGame(mode: GameMode? = nil, playerColor: PlayerColor? = nil) {
+        if let mode        { gameStore.gameMode    = mode }
+        if let playerColor { gameStore.playerColor = playerColor }
+        gameStore.newGame()
         analysis.clearHistory()
         analysis.observe(gameStore)
     }

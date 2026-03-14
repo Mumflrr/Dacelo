@@ -4,7 +4,6 @@
 import SwiftUI
 
 // MARK: - Collapsible Move History Section
-// Drop this directly into the macOS sidebar List or the iOS ScrollView.
 
 struct MoveHistorySection: View {
     let critiques: [MoveCritique]
@@ -14,7 +13,6 @@ struct MoveHistorySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
 
-            // ── Collapsible header ────────────────────────────────────────
             Button {
                 withAnimation(.spring(response: 0.35)) { isExpanded.toggle() }
             } label: {
@@ -39,7 +37,6 @@ struct MoveHistorySection: View {
             }
             .buttonStyle(.plain)
 
-            // ── Cards ─────────────────────────────────────────────────────
             if isExpanded {
                 VStack(spacing: 8) {
                     ForEach(critiques.reversed()) { critique in
@@ -60,7 +57,7 @@ struct MoveHistorySection: View {
     }
 }
 
-// MARK: - Standalone full-screen history (NavigationStack push / sheet)
+// MARK: - Standalone full-screen history
 
 struct MoveHistoryView: View {
     let critiques: [MoveCritique]
@@ -90,6 +87,7 @@ struct MoveCard: View {
     let critique: MoveCritique
     let isSelected: Bool
     @State private var showAlternatives = false
+    @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -97,21 +95,18 @@ struct MoveCard: View {
             // ── Header ────────────────────────────────────────────────────
             HStack(alignment: .center, spacing: 12) {
 
-                // Side indicator — chess king glyph, white/dark coloring per side
+                // Piece icon from the active piece set
                 ZStack {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(critique.side == "white"
                               ? Color.white.opacity(0.92)
                               : Color(white: 0.08))
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        Text(critique.side == "white" ? "♔" : "♚")
-                            .font(.system(size: 26))
-                            .foregroundStyle(critique.side == "white"
-                                             ? Color.black.opacity(0.8) : Color.white.opacity(0.9))
-                        Spacer(minLength: 0)
-                    }
-                    .frame(width: 52, height: 52)
+                    PieceSetPieceView(
+                        pieceType: critique.pieceType,
+                        side:      critique.side,
+                        pieceSet:  settings.pieceSet
+                    )
+                    .frame(width: 36, height: 36)
                 }
                 .frame(width: 52, height: 52)
 
@@ -121,7 +116,6 @@ struct MoveCard: View {
                         Text(critique.moveNotation)
                             .font(.system(size: 13, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.45))
-                        // Show UCI move only if it's different from the notation label
                         if !critique.move.isEmpty, critique.move != critique.moveNotation {
                             Text(formatUCI(critique.move))
                                 .font(.system(size: 20, weight: .bold, design: .monospaced))
@@ -133,7 +127,6 @@ struct MoveCard: View {
 
                 Spacer()
 
-                // Eval change
                 if let before = critique.scoreBefore, let after = critique.scoreAfter {
                     EvalChangeIndicator(before: before, after: after, side: critique.side)
                 }
@@ -147,7 +140,7 @@ struct MoveCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // ── Engine's suggested line (non-excellent moves only) ────────
+            // ── Engine's suggested line ───────────────────────────────────
             if critique.classification != .excellent,
                critique.classification != .book,
                !critique.suggestedLine.isEmpty {
@@ -232,15 +225,12 @@ struct QualityBadge: View {
 }
 
 // MARK: - Eval Change Indicator
-// Shows score AFTER the move, with a delta arrow showing how much changed.
-// Delta sign is from the mover's perspective: green = improved for mover.
 
 struct EvalChangeIndicator: View {
     let before: Int
     let after: Int
-    let side: String   // "white" | "black"
+    let side: String
 
-    // From mover's perspective: positive = they improved their position
     private var moverDelta: Int {
         side == "white" ? (after - before) : (before - after)
     }
@@ -323,24 +313,20 @@ struct EngineLineView: View {
 }
 
 // MARK: - Characteristics Badges
-// Two rows of two badges so nothing gets clipped in a narrow sidebar.
 
 struct CharacteristicsBadges: View {
     let characteristics: PositionCharacteristics
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Row 1: sharpness + difficulty
             HStack(spacing: 6) {
                 Badge(text: characteristics.sharpness,  icon: "flame.fill",   color: sharpnessColor)
                 Badge(text: characteristics.difficulty, icon: difficultyIcon, color: difficultyColor)
             }
-            // Row 2: margin + line type
             HStack(spacing: 6) {
                 Badge(text: characteristics.margin_for_error, icon: "target",   color: marginColor)
                 Badge(text: characteristics.line_type,        icon: lineIcon,   color: .purple)
             }
-            // Explanation
             Text(characteristics.explanation)
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.75))
@@ -388,10 +374,10 @@ struct CharacteristicsBadges: View {
 
     private var lineIcon: String {
         switch characteristics.line_type {
-        case "Forcing":    return "bolt.fill"
-        case "Committal":  return "arrow.right.circle.fill"
-        case "Flexible":   return "arrow.triangle.branch"
-        default:           return "tortoise.fill"
+        case "Forcing":   return "bolt.fill"
+        case "Committal": return "arrow.right.circle.fill"
+        case "Flexible":  return "arrow.triangle.branch"
+        default:          return "tortoise.fill"
         }
     }
 }
@@ -511,7 +497,8 @@ struct AlternativeLineRow: View {
             MoveHistorySection(critiques: [
                 MoveCritique(
                     moveNumber: 1, side: "white", move: "e2e4", moveNotation: "1.",
-                    scoreBefore: 20, scoreAfter: 35, classification: .excellent,
+                    pieceType: "p",
+                    scoreBefore: nil, scoreAfter: 35, classification: .excellent,
                     comment: "Best move! The engine agrees this is the top choice.",
                     alternatives: [
                         AlternativeMove(rank: 1, move: "d2d4", scoreCP: 28, scoreMate: nil,
@@ -520,17 +507,16 @@ struct AlternativeLineRow: View {
                     characteristics: PositionCharacteristics(
                         sharpness: "Balanced", difficulty: "Beginner",
                         margin_for_error: "Forgiving", line_type: "Flexible",
-                        explanation: "Engine rates this +0.35 pawns in White's favour. Several moves are nearly equal."
+                        explanation: "Engine rates this +0.35 pawns in White's favour."
                     ),
                     suggestedLine: ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
                 ),
                 MoveCritique(
                     moveNumber: 1, side: "black", move: "e7e5", moveNotation: "1...",
+                    pieceType: "p",
                     scoreBefore: 35, scoreAfter: 13, classification: .good,
                     comment: "Good move — only 22cp from optimal.",
-                    alternatives: [],
-                    characteristics: nil,
-                    suggestedLine: []
+                    alternatives: [], characteristics: nil, suggestedLine: []
                 )
             ])
             .padding()

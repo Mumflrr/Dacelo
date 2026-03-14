@@ -3,48 +3,47 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		7A5D332D2F4424BA00EB39F6 /* DaceloApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5D332C2F4424BA00EB39F6 /* DaceloApp.swift */; };
-		7A5D33332F4424BB00EB39F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7A5D33322F4424BB00EB39F6 /* Assets.xcassets */; };
-		7A5D33372F4424BB00EB39F6 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7A5D33362F4424BB00EB39F6 /* Preview Assets.xcassets */; };
 		7A5D333F2F4425AF00EB39F6 /* Chess in Frameworks */ = {isa = PBXBuildFile; productRef = 7A5D333E2F4425AF00EB39F6 /* Chess */; };
-		7A644AF92F630BAE003F6626 /* MoveHistoryDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A644AF82F630BAE003F6626 /* MoveHistoryDrawer.swift */; };
-		7A730D712F6110930037C8D6 /* AnalysisStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D622F6110930037C8D6 /* AnalysisStore.swift */; };
-		7A730D722F6110930037C8D6 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D632F6110930037C8D6 /* AppSettings.swift */; };
-		7A730D732F6110930037C8D6 /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D642F6110930037C8D6 /* AppStore.swift */; };
-		7A730D742F6110930037C8D6 /* GameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D652F6110930037C8D6 /* GameStore.swift */; };
-		7A730D752F6110930037C8D6 /* MoveCritique.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D672F6110930037C8D6 /* MoveCritique.swift */; };
-		7A730D762F6110930037C8D6 /* PositionCharacteristics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D682F6110930037C8D6 /* PositionCharacteristics.swift */; };
-		7A730D772F6110930037C8D6 /* EngineModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D6A2F6110930037C8D6 /* EngineModels.swift */; };
-		7A730D782F6110930037C8D6 /* EngineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D6B2F6110930037C8D6 /* EngineService.swift */; };
-		7A730D792F6110930037C8D6 /* Lc0Robot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D6C2F6110930037C8D6 /* Lc0Robot.swift */; };
-		7A730D7A2F6110930037C8D6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D6E2F6110930037C8D6 /* ContentView.swift */; };
-		7A730D7B2F6110930037C8D6 /* MoveHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A730D6F2F6110930037C8D6 /* MoveHistoryView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		7A05C76B2F4435F20086850A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7A5D33292F4424BA00EB39F6 /* Dacelo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dacelo.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		7A5D332C2F4424BA00EB39F6 /* DaceloApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaceloApp.swift; sourceTree = "<group>"; };
-		7A5D33322F4424BB00EB39F6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		7A5D33342F4424BB00EB39F6 /* Dacelo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Dacelo.entitlements; sourceTree = "<group>"; };
-		7A5D33362F4424BB00EB39F6 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		7A644AF82F630BAE003F6626 /* MoveHistoryDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoveHistoryDrawer.swift; sourceTree = "<group>"; };
-		7A730D622F6110930037C8D6 /* AnalysisStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AnalysisStore.swift; sourceTree = "<group>"; };
-		7A730D632F6110930037C8D6 /* AppSettings.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
-		7A730D642F6110930037C8D6 /* AppStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
-		7A730D652F6110930037C8D6 /* GameStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GameStore.swift; sourceTree = "<group>"; };
-		7A730D672F6110930037C8D6 /* MoveCritique.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MoveCritique.swift; sourceTree = "<group>"; };
-		7A730D682F6110930037C8D6 /* PositionCharacteristics.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PositionCharacteristics.swift; sourceTree = "<group>"; };
-		7A730D6A2F6110930037C8D6 /* EngineModels.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EngineModels.swift; sourceTree = "<group>"; };
-		7A730D6B2F6110930037C8D6 /* EngineService.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = EngineService.swift; sourceTree = "<group>"; };
-		7A730D6C2F6110930037C8D6 /* Lc0Robot.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Lc0Robot.swift; sourceTree = "<group>"; };
-		7A730D6E2F6110930037C8D6 /* ContentView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		7A730D6F2F6110930037C8D6 /* MoveHistoryView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MoveHistoryView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		7A644BBB2F637583003F6626 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Assets.xcassets,
+				DaceloApp.swift,
+				Engine/EngineModels.swift,
+				Engine/EngineService.swift,
+				Engine/Lc0Robot.swift,
+				Models/MoveCritique.swift,
+				Models/PositionCharacteristics.swift,
+				"Preview Content/Preview Assets.xcassets",
+				Stores/AnalysisStore.swift,
+				Stores/AppSettings.swift,
+				Stores/AppStore.swift,
+				Stores/GameStore.swift,
+				Views/BoardArrowOverlay.swift,
+				Views/ContentView.swift,
+				Views/DaceloboardView.swift,
+				Views/MoveHistoryDrawer.swift,
+				Views/MoveHistoryView.swift,
+				Views/PieceSetTheme.swift,
+			);
+			target = 7A5D33282F4424BA00EB39F6 /* Dacelo */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		7A644BA82F637583003F6626 /* Dacelo */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (7A644BBB2F637583003F6626 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Dacelo; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		7A5D33262F4424BA00EB39F6 /* Frameworks */ = {
@@ -68,7 +67,7 @@
 		7A5D33202F4424BA00EB39F6 = {
 			isa = PBXGroup;
 			children = (
-				7A5D332B2F4424BA00EB39F6 /* Dacelo */,
+				7A644BA82F637583003F6626 /* Dacelo */,
 				7A5D332A2F4424BA00EB39F6 /* Products */,
 				7A05C75F2F442AC70086850A /* Frameworks */,
 			);
@@ -82,70 +81,6 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		7A5D332B2F4424BA00EB39F6 /* Dacelo */ = {
-			isa = PBXGroup;
-			children = (
-				7A730D6D2F6110930037C8D6 /* Engine */,
-				7A730D692F6110930037C8D6 /* Models */,
-				7A730D662F6110930037C8D6 /* Stores */,
-				7A730D702F6110930037C8D6 /* Views */,
-				7A05C76B2F4435F20086850A /* Info.plist */,
-				7A5D332C2F4424BA00EB39F6 /* DaceloApp.swift */,
-				7A5D33322F4424BB00EB39F6 /* Assets.xcassets */,
-				7A5D33342F4424BB00EB39F6 /* Dacelo.entitlements */,
-				7A5D33352F4424BB00EB39F6 /* Preview Content */,
-			);
-			path = Dacelo;
-			sourceTree = "<group>";
-		};
-		7A5D33352F4424BB00EB39F6 /* Preview Content */ = {
-			isa = PBXGroup;
-			children = (
-				7A5D33362F4424BB00EB39F6 /* Preview Assets.xcassets */,
-			);
-			path = "Preview Content";
-			sourceTree = "<group>";
-		};
-		7A730D662F6110930037C8D6 /* Stores */ = {
-			isa = PBXGroup;
-			children = (
-				7A730D622F6110930037C8D6 /* AnalysisStore.swift */,
-				7A730D632F6110930037C8D6 /* AppSettings.swift */,
-				7A730D642F6110930037C8D6 /* AppStore.swift */,
-				7A730D652F6110930037C8D6 /* GameStore.swift */,
-			);
-			path = Stores;
-			sourceTree = "<group>";
-		};
-		7A730D692F6110930037C8D6 /* Models */ = {
-			isa = PBXGroup;
-			children = (
-				7A730D672F6110930037C8D6 /* MoveCritique.swift */,
-				7A730D682F6110930037C8D6 /* PositionCharacteristics.swift */,
-			);
-			path = Models;
-			sourceTree = "<group>";
-		};
-		7A730D6D2F6110930037C8D6 /* Engine */ = {
-			isa = PBXGroup;
-			children = (
-				7A730D6A2F6110930037C8D6 /* EngineModels.swift */,
-				7A730D6B2F6110930037C8D6 /* EngineService.swift */,
-				7A730D6C2F6110930037C8D6 /* Lc0Robot.swift */,
-			);
-			path = Engine;
-			sourceTree = "<group>";
-		};
-		7A730D702F6110930037C8D6 /* Views */ = {
-			isa = PBXGroup;
-			children = (
-				7A644AF82F630BAE003F6626 /* MoveHistoryDrawer.swift */,
-				7A730D6E2F6110930037C8D6 /* ContentView.swift */,
-				7A730D6F2F6110930037C8D6 /* MoveHistoryView.swift */,
-			);
-			path = Views;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -155,6 +90,7 @@
 			buildPhases = (
 				7A5D33252F4424BA00EB39F6 /* Sources */,
 				7A5D33262F4424BA00EB39F6 /* Frameworks */,
+				7A644FE62F6448A4003F6626 /* ShellScript */,
 				7A5D33272F4424BA00EB39F6 /* Resources */,
 			);
 			buildRules = (
@@ -210,31 +146,37 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				7A5D33372F4424BB00EB39F6 /* Preview Assets.xcassets in Resources */,
-				7A5D33332F4424BB00EB39F6 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		7A644FE62F6448A4003F6626 /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\ncp -R \"${SRCROOT}/Dacelo/Pieces/\" \"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/Pieces/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7A5D33252F4424BA00EB39F6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				7A730D752F6110930037C8D6 /* MoveCritique.swift in Sources */,
-				7A730D7A2F6110930037C8D6 /* ContentView.swift in Sources */,
-				7A5D332D2F4424BA00EB39F6 /* DaceloApp.swift in Sources */,
-				7A730D782F6110930037C8D6 /* EngineService.swift in Sources */,
-				7A730D712F6110930037C8D6 /* AnalysisStore.swift in Sources */,
-				7A730D792F6110930037C8D6 /* Lc0Robot.swift in Sources */,
-				7A730D722F6110930037C8D6 /* AppSettings.swift in Sources */,
-				7A644AF92F630BAE003F6626 /* MoveHistoryDrawer.swift in Sources */,
-				7A730D742F6110930037C8D6 /* GameStore.swift in Sources */,
-				7A730D7B2F6110930037C8D6 /* MoveHistoryView.swift in Sources */,
-				7A730D732F6110930037C8D6 /* AppStore.swift in Sources */,
-				7A730D762F6110930037C8D6 /* PositionCharacteristics.swift in Sources */,
-				7A730D772F6110930037C8D6 /* EngineModels.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -367,6 +309,7 @@
 				DEVELOPMENT_TEAM = W2X988NVCQ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Dacelo/Info.plist;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app connects to your Windows PC via Tailscale to run the LC0 chess engine for move analysis.";
@@ -407,6 +350,7 @@
 				DEVELOPMENT_TEAM = W2X988NVCQ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Dacelo/Info.plist;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "This app connects to your Windows PC via Tailscale to run the LC0 chess engine for move analysis.";

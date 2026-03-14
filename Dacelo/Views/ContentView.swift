@@ -15,11 +15,16 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // Force pure dark background — not material, not mode-dependent
                 Color.black.ignoresSafeArea()
                 LinearGradient(
-                    colors: [.black, .blue.opacity(0.15), .purple.opacity(0.1)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
+                    stops: [
+                        .init(color: .black,                location: 0.00),
+                        .init(color: .blue.opacity(0.18),   location: 0.45),
+                        .init(color: .purple.opacity(0.22), location: 0.75),
+                        .init(color: .black.opacity(0.90),  location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint:   .bottomTrailing
                 )
                 .ignoresSafeArea()
                 #if os(macOS)
@@ -34,8 +39,6 @@ struct ContentView: View {
             #endif
             .preferredColorScheme(.dark)
             .toolbar {
-                // Leading area is just the title on macOS.
-                // Trailing: connection dot+label then settings gear, left to right.
                 ToolbarItemGroup(placement: .primaryAction) {
                     ConnectionToolbarItem()
                         .environmentObject(app.engine.state)
@@ -60,43 +63,43 @@ struct ContentView: View {
     }
 
     // MARK: - macOS layout
-    // Board left, sidebar right.
-    // Sidebar: AnalysisPanel + nav arrows at top, history drawer pinned to bottom.
 
     #if os(macOS)
     private var macOSLayout: some View {
         HStack(alignment: .top, spacing: 0) {
-
-            // ── Board ─────────────────────────────────────────────────────
-            GeometryReader { geo in
-                let side = min(geo.size.width, geo.size.height)
-                BoardView()
-                    .environmentObject(game.chessStore)
-                    .frame(width: side, height: side)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .shadow(color: .black.opacity(0.4), radius: 24, y: 12)
+            VStack(spacing: 8) {
+                GeometryReader { geo in
+                    let side = min(geo.size.width, geo.size.height)
+                    boardWithArrows
+                        .frame(width: side, height: side)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .shadow(color: game.boardTheme.dark.opacity(0.45), radius: 28, y: 8)
+                        .shadow(color: .black.opacity(0.5), radius: 16, y: 10)
+                        .fixedSize()
+                }
+                BoardControlBar()
+                    .environmentObject(app)
+                    .environmentObject(game)
+                    .environmentObject(analysis)
+                    .environmentObject(settings)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
             }
             .padding(16)
 
-            // ── Sidebar ───────────────────────────────────────────────────
             VStack(spacing: 0) {
-                // Analysis panel + PV line
                 AnalysisPanel()
                     .environmentObject(analysis)
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
-
-                // Move navigation arrows
                 MoveNavigationBar()
                     .environmentObject(analysis)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-
                 Spacer()
             }
             .frame(width: 330)
             .padding(.trailing, 8)
-            // Drawer overlaid at bottom — floats over spacer and nav bar when expanded
             .overlay(alignment: .bottom) {
                 MoveHistoryDrawer(
                     critiques: analysis.moveCritiques,
@@ -115,11 +118,19 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(spacing: 14) {
-                    BoardView()
-                        .environmentObject(game.chessStore)
+                    boardWithArrows
                         .aspectRatio(1, contentMode: .fit)
                         .padding(.horizontal, 16).padding(.top, 8)
-                        .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+                        .shadow(color: game.boardTheme.dark.opacity(0.45), radius: 28, y: 8)
+                        .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
+                        .layoutPriority(1)
+
+                    BoardControlBar()
+                        .environmentObject(app)
+                        .environmentObject(game)
+                        .environmentObject(analysis)
+                        .environmentObject(settings)
+                        .padding(.horizontal, 16)
 
                     AnalysisPanel()
                         .environmentObject(analysis)
@@ -129,22 +140,104 @@ struct ContentView: View {
                         .environmentObject(analysis)
                         .padding(.horizontal, 16)
 
-                    // Space so content isn't hidden behind drawer
                     Color.clear.frame(height: 80)
                 }
             }
-
             MoveHistoryDrawer(
                 critiques: analysis.moveCritiques,
                 selectedIndex: analysis.selectedCritiqueIndex
             )
         }
     }
+
+    // MARK: - Board + arrows
+
+    private var isFlipped: Bool {
+        game.gameMode == .humanVsEngine && game.playerColor == .black
+    }
+
+    private var boardWithArrows: some View {
+        ZStack {
+            DaceloboardView(boardTheme: game.boardTheme,
+                            pieceSet:   settings.pieceSet,
+                            isFlipped:  isFlipped)
+                .environmentObject(game.chessStore)
+                .environmentObject(game)
+            BoardArrowOverlay(arrows: analysis.bestMoveArrow.map { [$0] } ?? [])
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .background(
+            RoundedRectangle(cornerRadius: 24)
+                .fill(game.boardTheme.dark.opacity(0.35))
+                .blur(radius: 20)
+                .padding(-4)
+                .allowsHitTesting(false)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(game.boardTheme.dark.opacity(0.35), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Board Control Bar
+
+struct BoardControlBar: View {
+    @EnvironmentObject var app:      AppStore
+    @EnvironmentObject var game:     GameStore
+    @EnvironmentObject var analysis: AnalysisStore
+    @EnvironmentObject var settings: AppSettings
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if game.gameMode == .humanVsEngine {
+                Button {
+                    game.togglePause()
+                } label: {
+                    Label(
+                        game.isPaused ? "Resume Leela" : "Take Leela's Turn",
+                        systemImage: game.isPaused ? "play.fill" : "pause.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(game.isPaused ? .green : .orange)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Capsule().fill(
+                        (game.isPaused ? Color.green : Color.orange).opacity(0.15)
+                    ))
+                    .overlay(Capsule().strokeBorder(
+                        (game.isPaused ? Color.green : Color.orange).opacity(0.4),
+                        lineWidth: 1
+                    ))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                analysis.requestHint()
+            } label: {
+                HStack(spacing: 5) {
+                    if analysis.isRequestingHint {
+                        ProgressView().controlSize(.mini).tint(.blue)
+                    } else {
+                        Image(systemName: "lightbulb.fill")
+                    }
+                    Text("Hint")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Capsule().fill(Color.blue.opacity(0.15)))
+                .overlay(Capsule().strokeBorder(Color.blue.opacity(0.4), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(analysis.isRequestingHint)
+
+            Spacer()
+        }
+    }
 }
 
 // MARK: - Connection Toolbar Item
-// Plain dot + hostname/Connect text. No background — sits naturally in the toolbar
-// to the left of the settings gear icon.
 
 struct ConnectionToolbarItem: View {
     @EnvironmentObject var connectionState: EngineConnectionState
@@ -170,7 +263,6 @@ struct ConnectionToolbarItem: View {
 }
 
 // MARK: - Analysis Panel
-// Copied verbatim from original, with EngineLineView for best-line PV added.
 
 struct AnalysisPanel: View {
     @EnvironmentObject var analysis: AnalysisStore
@@ -205,7 +297,6 @@ struct AnalysisPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .animation(.easeInOut, value: analysis.lastFeedback)
 
-                    // Best line PV
                     if !analysis.currentPV.isEmpty {
                         EngineLineView(label: "Best line",
                                        moves: analysis.currentPV,
@@ -291,7 +382,7 @@ struct ModernEvalBadge: View {
     }
 }
 
-// MARK: - New Game Button (used inside Settings only)
+// MARK: - New Game Button
 
 struct NewGameButton: View {
     @EnvironmentObject var app: AppStore
@@ -320,7 +411,6 @@ struct NewGameButton: View {
 }
 
 // MARK: - Move Navigation Bar
-// Prev/next arrows to step through move history cards.
 
 struct MoveNavigationBar: View {
     @EnvironmentObject var analysis: AnalysisStore
@@ -408,7 +498,7 @@ struct RoundedCornersShape: InsettableShape {
     }
 }
 
-// MARK: - Shared background (always dark — not color-scheme dependent)
+// MARK: - Shared background
 
 var appBackground: some View {
     ZStack {
@@ -432,11 +522,13 @@ struct SettingsView: View {
         #if os(macOS)
         macOSSettings
             .navigationTitle("Settings")
-            .frame(minWidth: 460, minHeight: 400)
+            .frame(minWidth: 480, minHeight: 420)
+            .preferredColorScheme(.dark)
         #else
         iOSSettings
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .preferredColorScheme(.dark)
         #endif
     }
 
@@ -446,79 +538,137 @@ struct SettingsView: View {
             appBackground.ignoresSafeArea()
             ScrollView {
                 VStack(spacing: 20) {
-                    SettingsCard(title: "Server Connection", icon: "network", iconColor: .blue) {
-                        SettingsRow(label: "Tailscale Host / IP") {
-                            TextField("e.g. my-pc or 100.x.x.x", text: $settings.serverHost)
-                                .textFieldStyle(.plain)
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 7)
-                                    .fill(.white.opacity(0.08)))
-                                .frame(maxWidth: 220).autocorrectionDisabled()
-                        }
-                        Divider().background(.white.opacity(0.1))
-                        SettingsRow(label: "Port") {
-                            TextField("8765", value: $settings.serverPort,
-                                      format: .number.grouping(.never))
-                                .textFieldStyle(.plain)
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 7)
-                                    .fill(.white.opacity(0.08)))
-                                .frame(width: 90)
-                        }
-                        Divider().background(.white.opacity(0.1))
-                        HStack {
-                            connectionStatus
-                            Spacer()
-                            Button(app.engine.state.isConnected ? "Reconnect" : "Connect") {
-                                app.connectToServer()
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 16).padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 9)
-                                    .fill(LinearGradient(colors: [.blue, .blue.opacity(0.7)],
-                                                         startPoint: .topLeading,
-                                                         endPoint: .bottomTrailing))
-                            )
-                            .foregroundStyle(.white)
-                            .font(.subheadline.weight(.semibold))
-                        }
-                    }
-
-                    SettingsCard(title: "Game", icon: "gamecontroller.fill", iconColor: .purple) {
-                        SettingsRow(label: "Game Mode") {
-                            Picker("", selection: $game.gameMode) {
-                                ForEach(GameMode.allCases) { mode in
-                                    Text(mode.rawValue).tag(mode)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                        }
-                        Divider().background(.white.opacity(0.1))
-                        NewGameButton(onNewGame: { dismiss() })
-                            .environmentObject(app)
-                    }
-
-                    SettingsCard(title: "Engine", icon: "cpu", iconColor: .green) {
-                        SettingsRow(label: "Think Time") {
-                            HStack(spacing: 10) {
-                                Slider(value: Binding(
-                                    get: { Double(settings.moveTimeMs) },
-                                    set: { settings.moveTimeMs = Int($0) }
-                                ), in: 500...10000, step: 500)
-                                .frame(maxWidth: 180).accentColor(.blue)
-                                Text(settings.moveTimeMs >= 1000
-                                     ? "\(settings.moveTimeMs / 1000)s"
-                                     : "\(settings.moveTimeMs)ms")
-                                    .font(.system(.subheadline, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.7))
-                                    .frame(width: 44, alignment: .trailing)
-                            }
-                        }
-                    }
+                    connectionCard
+                    gameCard
+                    boardCard
+                    analysisCard
+                    engineCard
                 }
                 .padding(24)
+            }
+        }
+    }
+
+    private var connectionCard: some View {
+        SettingsCard(title: "Server Connection", icon: "network", iconColor: .blue) {
+            SettingsRow(label: "Tailscale Host / IP") {
+                TextField("e.g. my-pc or 100.x.x.x", text: $settings.serverHost)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
+                    .frame(maxWidth: 220).autocorrectionDisabled()
+            }
+            Divider().background(.white.opacity(0.1))
+            SettingsRow(label: "Port") {
+                TextField("8765", value: $settings.serverPort, format: .number.grouping(.never))
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
+                    .frame(width: 90)
+            }
+            Divider().background(.white.opacity(0.1))
+            HStack {
+                connectionStatus
+                Spacer()
+                Button(app.engine.state.isConnected ? "Reconnect" : "Connect") {
+                    app.connectToServer()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(LinearGradient(colors: [.blue, .blue.opacity(0.7)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                )
+                .foregroundStyle(.white)
+                .font(.subheadline.weight(.semibold))
+            }
+        }
+    }
+
+    private var gameCard: some View {
+        SettingsCard(title: "Game", icon: "gamecontroller.fill", iconColor: .purple) {
+            SettingsRow(label: "Mode") {
+                Picker("", selection: $game.gameMode) {
+                    ForEach(GameMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
+                }
+                .pickerStyle(.menu).labelsHidden()
+            }
+            if game.gameMode == .humanVsEngine {
+                Divider().background(.white.opacity(0.1))
+                SettingsRow(label: "Play as") {
+                    Picker("", selection: $game.playerColor) {
+                        ForEach(PlayerColor.allCases) { color in Text(color.rawValue).tag(color) }
+                    }
+                    .pickerStyle(.segmented).frame(maxWidth: 160)
+                }
+            }
+            Divider().background(.white.opacity(0.1))
+            NewGameButton(onNewGame: { dismiss() }).environmentObject(app)
+        }
+    }
+
+    private var boardCard: some View {
+        SettingsCard(title: "Board", icon: "squareshape.split.2x2", iconColor: .brown) {
+            SettingsRow(label: "Theme") {
+                HStack(spacing: 8) {
+                    ForEach(BoardTheme.allCases) { theme in
+                        BoardThemeSwatch(theme: theme,
+                                         isSelected: game.boardTheme == theme)
+                            .onTapGesture { game.setBoardTheme(theme) }
+                    }
+                }
+            }
+            Divider().background(.white.opacity(0.1))
+            SettingsRow(label: "Pieces") {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(PieceSet.allCases) { set in
+                            PieceSetSwatch(pieceSet: set,
+                                           isSelected: settings.pieceSet == set)
+                                .onTapGesture { settings.pieceSetName = set.rawValue }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                    .padding(.leading, 4)
+                }
+            }
+        }
+    }
+
+    private var analysisCard: some View {
+        SettingsCard(title: "Analysis", icon: "brain.head.profile", iconColor: .blue) {
+            SettingsRow(label: "Show best-move arrow") {
+                Toggle("", isOn: $settings.showBestMoveArrow).labelsHidden()
+            }
+            Divider().background(.white.opacity(0.1))
+            SettingsRow(label: "Hint arrows") {
+                Picker("", selection: $settings.hintCount) {
+                    Text("1 (Best)").tag(1)
+                    Text("2").tag(2)
+                    Text("3").tag(3)
+                }
+                .pickerStyle(.segmented).frame(maxWidth: 180)
+            }
+        }
+    }
+
+    private var engineCard: some View {
+        SettingsCard(title: "Engine", icon: "cpu", iconColor: .green) {
+            SettingsRow(label: "Think Time") {
+                HStack(spacing: 10) {
+                    Slider(value: Binding(
+                        get: { Double(settings.moveTimeMs) },
+                        set: { settings.moveTimeMs = Int($0) }
+                    ), in: 500...10000, step: 500)
+                    .frame(maxWidth: 180).accentColor(.blue)
+                    Text(settings.moveTimeMs >= 1000
+                         ? "\(settings.moveTimeMs / 1000)s"
+                         : "\(settings.moveTimeMs)ms")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 44, alignment: .trailing)
+                }
             }
         }
     }
@@ -540,16 +690,13 @@ struct SettingsView: View {
             Section("Server Connection") {
                 LabeledContent("Host / IP") {
                     TextField("e.g. my-pc or 100.x.x.x", text: $settings.serverHost)
-                        .multilineTextAlignment(.trailing)
-                        .autocorrectionDisabled()
+                        .multilineTextAlignment(.trailing).autocorrectionDisabled()
                         #if os(iOS)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL).textInputAutocapitalization(.never)
                         #endif
                 }
                 LabeledContent("Port") {
-                    TextField("8765", value: $settings.serverPort,
-                              format: .number.grouping(.never))
+                    TextField("8765", value: $settings.serverPort, format: .number.grouping(.never))
                         .multilineTextAlignment(.trailing)
                         #if os(iOS)
                         .keyboardType(.numberPad)
@@ -557,14 +704,48 @@ struct SettingsView: View {
                 }
                 Button(app.engine.state.isConnected ? "Reconnect" : "Connect") {
                     app.connectToServer()
-                }
-                .buttonStyle(.borderedProminent)
+                }.buttonStyle(.borderedProminent)
             }
             Section("Game") {
-                Picker("Play as", selection: $game.gameMode) {
+                Picker("Mode", selection: $game.gameMode) {
                     ForEach(GameMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
                 }
+                if game.gameMode == .humanVsEngine {
+                    Picker("Play as", selection: $game.playerColor) {
+                        ForEach(PlayerColor.allCases) { color in Text(color.rawValue).tag(color) }
+                    }.pickerStyle(.segmented)
+                }
                 NewGameButton(onNewGame: { dismiss() }).environmentObject(app)
+            }
+            Section("Board") {
+                LabeledContent("Theme") {
+                    HStack(spacing: 6) {
+                        ForEach(BoardTheme.allCases) { theme in
+                            BoardThemeSwatch(theme: theme, isSelected: game.boardTheme == theme)
+                                .onTapGesture { game.setBoardTheme(theme) }
+                        }
+                    }
+                }
+                LabeledContent("Pieces") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(PieceSet.allCases) { set in
+                                PieceSetSwatch(pieceSet: set,
+                                               isSelected: settings.pieceSet == set)
+                                    .onTapGesture { settings.pieceSetName = set.rawValue }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            Section("Analysis") {
+                Toggle("Show best-move arrow", isOn: $settings.showBestMoveArrow)
+                LabeledContent("Hint arrows") {
+                    Picker("", selection: $settings.hintCount) {
+                        Text("1").tag(1); Text("2").tag(2); Text("3").tag(3)
+                    }.pickerStyle(.segmented).frame(maxWidth: 140)
+                }
             }
             Section("Engine") {
                 LabeledContent("Think Time") {
@@ -573,8 +754,7 @@ struct SettingsView: View {
                             get: { Double(settings.moveTimeMs) },
                             set: { settings.moveTimeMs = Int($0) }
                         ), in: 500...10000, step: 500)
-                        Text("\(settings.moveTimeMs)ms")
-                            .monospacedDigit().frame(width: 70, alignment: .trailing)
+                        Text("\(settings.moveTimeMs)ms").monospacedDigit().frame(width: 70, alignment: .trailing)
                     }
                 }
             }
@@ -584,6 +764,30 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Board Theme Swatch
+
+struct BoardThemeSwatch: View {
+    let theme: BoardTheme
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            theme.dark.frame(width: 22, height: 22)
+            theme.light.frame(width: 22, height: 22)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isSelected ? Color.white : Color.white.opacity(0.2),
+                              lineWidth: isSelected ? 2 : 1)
+        )
+        .shadow(color: isSelected ? .white.opacity(0.3) : .clear, radius: 4)
+        .scaleEffect(isSelected ? 1.12 : 1.0)
+        .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isSelected)
+        .help(theme.rawValue)
     }
 }
 
@@ -622,9 +826,12 @@ struct SettingsRow<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack {
-            Text(label).foregroundStyle(.white.opacity(0.7)).font(.subheadline)
-            Spacer()
+        HStack(alignment: .center) {
+            Text(label)
+                .foregroundStyle(.white.opacity(0.7))
+                .font(.subheadline)
+                .fixedSize()
+            Spacer(minLength: 12)
             content
         }
     }

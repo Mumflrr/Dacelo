@@ -45,10 +45,10 @@ enum MoveQuality: String, Codable {
 struct AlternativeMove: Codable, Identifiable {
     var id: Int { rank }
     let rank: Int
-    let move: String        // UCI first move e.g. "e2e4"
+    let move: String
     let scoreCP: Int?
     let scoreMate: Int?
-    let pv: [String]        // full principal variation (up to 8 UCI moves)
+    let pv: [String]
 }
 
 // MARK: - Move Critique
@@ -59,13 +59,15 @@ struct MoveCritique: Identifiable, Codable {
     let side: String           // "white" | "black"
     let move: String           // UCI "e2e4"
     let moveNotation: String   // label "1." or "1..."
-    let scoreBefore: Int?      // white-positive centipawns before move
-    let scoreAfter: Int?       // white-positive centipawns after move
+    /// Piece type code: "p","n","b","r","q","k". Used for the move history icon.
+    let pieceType: String
+    let scoreBefore: Int?
+    let scoreAfter: Int?
     let classification: MoveQuality
     let comment: String
     let alternatives: [AlternativeMove]
     let characteristics: PositionCharacteristics?
-    let suggestedLine: [String] // engine's top PV from this position (UCI moves)
+    let suggestedLine: [String]
 
     init(
         id: UUID = UUID(),
@@ -73,6 +75,7 @@ struct MoveCritique: Identifiable, Codable {
         side: String,
         move: String,
         moveNotation: String,
+        pieceType: String = "p",
         scoreBefore: Int?,
         scoreAfter: Int?,
         classification: MoveQuality,
@@ -86,6 +89,7 @@ struct MoveCritique: Identifiable, Codable {
         self.side            = side
         self.move            = move
         self.moveNotation    = moveNotation
+        self.pieceType       = pieceType
         self.scoreBefore     = scoreBefore
         self.scoreAfter      = scoreAfter
         self.classification  = classification

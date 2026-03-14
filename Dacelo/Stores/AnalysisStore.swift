@@ -13,6 +13,7 @@ final class AnalysisStore: ObservableObject {
     @Published var moveCritiques: [MoveCritique] = []
     @Published var lastFeedback: String          = ""
     @Published var bestMoveArrow: (from: String, to: String)? = nil
+    @Published var isRequestingHint: Bool        = false
     @Published var isAnalysing: Bool             = false
     @Published var scoreCP: Int?                 = nil
     @Published var currentCharacteristics: PositionCharacteristics? = nil
@@ -37,6 +38,8 @@ final class AnalysisStore: ObservableObject {
     // MARK: - Private
 
     private let engine: EngineService
+    private weak var gameStore:   GameStore?
+    private weak var appSettings: AppSettings?
     private var cancellables: Set<AnyCancellable> = []
 
     private var prevEval: Int? = nil
@@ -51,7 +54,9 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Public API
 
-    func observe(_ gameStore: GameStore) {
+    func observe(_ gameStore: GameStore, settings: AppSettings? = nil) {
+        self.gameStore   = gameStore
+        self.appSettings = settings
         cancellables.removeAll()
         clearHistory()
 
@@ -60,9 +65,34 @@ final class AnalysisStore: ObservableObject {
             .removeDuplicates { $0.board.FEN == $1.board.FEN }
             .dropFirst()
             .sink { [weak self] game in
-                self?.handlePositionChange(game)
+                // Dispatch to avoid publishing changes during view updates
+                DispatchQueue.main.async {
+                    self?.handlePositionChange(game)
+                }
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - Hint
+    /// Requests the best move arrow. Loading indicator stays on until the arrow
+    /// is visible. Arrow persists until the next move is made.
+    func requestHint(count: Int = 1) {
+        guard let fen = gameStore?.currentFEN, !fen.isEmpty else { return }
+        guard !isRequestingHint else { return }
+        isRequestingHint = true
+        Task {
+            do {
+                let result = try await engine.analyse(fen: fen, movetime: 1500)
+                if let from = result.from, let to = result.to,
+                   !from.isEmpty, !to.isEmpty {
+                    bestMoveArrow = (from: from, to: to)
+                }
+            } catch {
+                print("[AnalysisStore] Hint failed: \(error.localizedDescription)")
+            }
+            // Stop loading only after the arrow has been set (or failed)
+            isRequestingHint = false
+        }
     }
 
     func clearHistory() {
@@ -87,6 +117,9 @@ final class AnalysisStore: ObservableObject {
         let fen      = game.board.FEN
         // Starting position — don't analyse, happens after newGame() resets the board.
         guard !fen.hasPrefix("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR") else { return }
+
+        // A move was made — clear any displayed hint arrow
+        bestMoveArrow = nil
 
         let fenParts = fen.split(separator: " ").map(String.init)
 
@@ -129,9 +162,25 @@ final class AnalysisStore: ObservableObject {
             lastUCI = ""
         }
 
+        // Extract piece type from the destination square after the move.
+        // Since Position is just Int, move.end is the board index directly.
+        let pieceType: String = {
+            guard let move = lastMove, move.end.isBoardPosition else { return "p" }
+            let destPiece = game.board.squares[move.end].piece
+            switch destPiece?.pieceType {
+            case .knight: return "n"
+            case .bishop: return "b"
+            case .rook:   return "r"
+            case .queen:  return "q"
+            case .king:   return "k"
+            default:      return "p"
+            }
+        }()
+
         moveCount += 1
         let capturedMoveCount = moveCount
         let capturedPrevEval  = prevEval
+        let capturedPieceType = pieceType
 
         enqueue {
             await self.runMoveAnalysis(
@@ -139,6 +188,7 @@ final class AnalysisStore: ObservableObject {
                 side:       sideJustMoved,
                 movePrefix: movePrefix,
                 lastUCI:    lastUCI,
+                pieceType:  capturedPieceType,
                 moveNumber: capturedMoveCount,
                 prevEval:   capturedPrevEval
             )
@@ -152,6 +202,7 @@ final class AnalysisStore: ObservableObject {
         side: String,
         movePrefix: String,   // e.g. "1." or "3..."
         lastUCI: String,      // e.g. "e2e4" — the actual move just played
+        pieceType: String,    // "p","n","b","r","q","k"
         moveNumber: Int,
         prevEval: Int?
     ) async {
@@ -186,15 +237,16 @@ final class AnalysisStore: ObservableObject {
             let critique = MoveCritique(
                 moveNumber:      moveNumber,
                 side:            side,
-                move:            lastUCI,       // UCI string e.g. "e2e4"
-                moveNotation:    movePrefix,    // e.g. "1." or "3..."
+                move:            lastUCI,
+                moveNotation:    movePrefix,
+                pieceType:       pieceType,
                 scoreBefore:     prevEval,
                 scoreAfter:      normScore,
                 classification:  classification.quality,
                 comment:         classification.comment,
                 alternatives:    alternatives,
                 characteristics: result.characteristics,
-                suggestedLine:   result.pv ?? []
+                suggestedLine:   result.pv ?? [],
             )
 
             moveCritiques.append(critique)
@@ -204,12 +256,7 @@ final class AnalysisStore: ObservableObject {
             self.lastFeedback           = result.feedback ?? ""
             self.currentCharacteristics = result.characteristics
             self.currentPV              = result.pv ?? []
-
-            if let from = result.from, let to = result.to, !from.isEmpty, !to.isEmpty {
-                bestMoveArrow = (from: from, to: to)
-            } else {
-                bestMoveArrow = nil
-            }
+            // Best-move arrow is shown only via hint — analysis never sets it
 
         } catch {
             print("[AnalysisStore] Analysis failed: \(error.localizedDescription)")
@@ -243,9 +290,8 @@ final class AnalysisStore: ObservableObject {
         activeColor: String
     ) -> (quality: MoveQuality, comment: String) {
 
-        guard let prev = prevEval, let curr = currEval else {
-            return (.unknown, "")
-        }
+        let prev = prevEval ?? 0
+        guard let curr = currEval else { return (.unknown, "") }
 
         // Positive cpLoss = position got worse for the mover
         let cpLoss = side == "white" ? (prev - curr) : (curr - prev)

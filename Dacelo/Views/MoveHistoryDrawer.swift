@@ -90,9 +90,7 @@ struct MoveHistoryDrawer: View {
         let landed = (snapOffset + translationY).clamped(to: 0...DrawerSnap.hidden)
         let target = DrawerSnap.nearest(to: landed, velocity: velocityY)
         liveDelta = 0
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
-            snapOffset = target
-        }
+        snapOffset = target   // animated by the .animation modifier on .offset below
     }
 
     // MARK: Body
@@ -113,9 +111,12 @@ struct MoveHistoryDrawer: View {
                 .strokeBorder(.white.opacity(0.1), lineWidth: 1)
         )
         .offset(y: currentOffset)
-        // Strip all implicit animation — prevents phantom animate-from-origin
-        // on window move/resize and ensures drag frames are never interpolated
-        .transaction { $0.animation = nil }
+        // Animate snap transitions; suppress animation during live drag so frames
+        // are never interpolated. Using value: currentOffset ensures only state-driven
+        // changes animate — window moves/resizes don't change currentOffset so they
+        // won't produce phantom animations.
+        .animation(isDragging ? nil : .spring(response: 0.36, dampingFraction: 0.82),
+                   value: currentOffset)
         // When isDragging flips false (gesture ended OR was cancelled by system),
         // commit whatever translation we've accumulated
         .onChange(of: isDragging) { _, dragging in
@@ -157,9 +158,7 @@ struct MoveHistoryDrawer: View {
         .contentShape(Rectangle())
         .gesture(drag)
         .onTapGesture {
-            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
-                snapOffset = DrawerSnap.nextTap(from: snapOffset)
-            }
+            snapOffset = DrawerSnap.nextTap(from: snapOffset)
         }
         #if os(macOS)
         .onHover { inside in

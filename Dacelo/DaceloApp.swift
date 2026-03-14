@@ -7,6 +7,10 @@ import SwiftUI
 struct DaceloApp: App {
     @StateObject private var app = AppStore()
 
+    init() {
+            print(Bundle.main.url(forResource: "pw", withExtension: "svg", subdirectory: "Pieces/cburnett") ?? "NOT FOUND")
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
