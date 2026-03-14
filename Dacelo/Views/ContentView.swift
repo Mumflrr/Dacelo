@@ -1,5 +1,9 @@
 // ContentView.swift
 // Dacelo
+//
+// AnalysisPanel, ModernEvalBadge, WDLBar, MobilityBar, MaterialBalanceView,
+// ConfidenceBadge, DepthNodeFooter, LLMNarrativeView all live in
+// AnalysisPanelViews.swift — do not duplicate them here.
 
 import SwiftUI
 import Chess
@@ -33,7 +37,7 @@ struct ContentView: View {
                 iOSLayout
                 #endif
             }
-            .navigationTitle("Leela Chess")
+            .navigationTitle(game.gameMode == .analysisOnly ? "Analysis" : "Leela Chess")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -67,7 +71,7 @@ struct ContentView: View {
     #if os(macOS)
     private var macOSLayout: some View {
         HStack(alignment: .top, spacing: 0) {
-            VStack(spacing: 8) {
+            VStack(spacing: 4) {
                 GeometryReader { geo in
                     let side = min(geo.size.width, geo.size.height)
                     boardWithArrows
@@ -77,6 +81,12 @@ struct ContentView: View {
                         .shadow(color: .black.opacity(0.5), radius: 16, y: 10)
                         .fixedSize()
                 }
+
+                if let balance = analysis.materialBalance, balance != 0 {
+                    MaterialBalanceView(balance: balance)
+                        .padding(.horizontal, 16)
+                }
+
                 BoardControlBar()
                     .environmentObject(app)
                     .environmentObject(game)
@@ -90,6 +100,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 AnalysisPanel()
                     .environmentObject(analysis)
+                    .environmentObject(game)
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
                 MoveNavigationBar()
@@ -102,7 +113,7 @@ struct ContentView: View {
             .padding(.trailing, 8)
             .overlay(alignment: .bottom) {
                 MoveHistoryDrawer(
-                    critiques: analysis.moveCritiques,
+                    critiques:     analysis.moveCritiques,
                     selectedIndex: analysis.selectedCritiqueIndex
                 )
                 .padding(.trailing, 8)
@@ -125,6 +136,10 @@ struct ContentView: View {
                         .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
                         .layoutPriority(1)
 
+                    if let balance = analysis.materialBalance, balance != 0 {
+                        MaterialBalanceView(balance: balance)
+                    }
+
                     BoardControlBar()
                         .environmentObject(app)
                         .environmentObject(game)
@@ -134,6 +149,7 @@ struct ContentView: View {
 
                     AnalysisPanel()
                         .environmentObject(analysis)
+                        .environmentObject(game)
                         .padding(.horizontal, 16)
 
                     MoveNavigationBar()
@@ -144,7 +160,7 @@ struct ContentView: View {
                 }
             }
             MoveHistoryDrawer(
-                critiques: analysis.moveCritiques,
+                critiques:     analysis.moveCritiques,
                 selectedIndex: analysis.selectedCritiqueIndex
             )
         }
@@ -191,9 +207,7 @@ struct BoardControlBar: View {
     var body: some View {
         HStack(spacing: 10) {
             if game.gameMode == .humanVsEngine {
-                Button {
-                    game.togglePause()
-                } label: {
+                Button { game.togglePause() } label: {
                     Label(
                         game.isPaused ? "Resume Leela" : "Take Leela's Turn",
                         systemImage: game.isPaused ? "play.fill" : "pause.fill"
@@ -212,17 +226,26 @@ struct BoardControlBar: View {
                 .buttonStyle(.plain)
             }
 
-            Button {
-                analysis.requestHint()
-            } label: {
+            if game.gameMode == .analysisOnly {
+                Button { app.newGame() } label: {
+                    Label("New Game", systemImage: "arrow.counterclockwise")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.purple)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Capsule().fill(Color.purple.opacity(0.15)))
+                        .overlay(Capsule().strokeBorder(Color.purple.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button { analysis.requestHint() } label: {
                 HStack(spacing: 5) {
                     if analysis.isRequestingHint {
                         ProgressView().controlSize(.mini).tint(.blue)
                     } else {
                         Image(systemName: "lightbulb.fill")
                     }
-                    Text("Hint")
-                        .font(.caption.weight(.semibold))
+                    Text("Hint").font(.caption.weight(.semibold))
                 }
                 .foregroundStyle(.blue)
                 .padding(.horizontal, 12).padding(.vertical, 8)
@@ -259,126 +282,6 @@ struct ConnectionToolbarItem: View {
         }
         .buttonStyle(.plain)
         .disabled(connectionState.isConnected)
-    }
-}
-
-// MARK: - Analysis Panel
-
-struct AnalysisPanel: View {
-    @EnvironmentObject var analysis: AnalysisStore
-    @State private var isExpanded = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                brainIcon
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Engine Analysis").font(.headline).foregroundStyle(.white)
-                    if analysis.isAnalysing {
-                        HStack(spacing: 4) {
-                            ProgressView().controlSize(.mini).tint(.blue)
-                            Text("Analysing…").font(.caption).foregroundStyle(.white.opacity(0.7))
-                        }
-                    }
-                }
-                Spacer()
-                if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
-                expandButton
-            }
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(analysis.lastFeedback.isEmpty
-                         ? "Make a move to get engine feedback."
-                         : analysis.lastFeedback)
-                        .font(.subheadline)
-                        .foregroundStyle(analysis.lastFeedback.isEmpty
-                                         ? .white.opacity(0.5) : .white.opacity(0.9))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .animation(.easeInOut, value: analysis.lastFeedback)
-
-                    if !analysis.currentPV.isEmpty {
-                        EngineLineView(label: "Best line",
-                                       moves: analysis.currentPV,
-                                       accentColor: .blue)
-                    }
-
-                    if let chars = analysis.currentCharacteristics {
-                        CharacteristicsBadges(characteristics: chars)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20).fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.2), radius: 10, y: 5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(
-                    LinearGradient(colors: [.blue.opacity(0.3), .purple.opacity(0.3)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 1
-                )
-        )
-    }
-
-    private var brainIcon: some View {
-        ZStack {
-            Circle().fill(.blue.gradient.opacity(0.2)).frame(width: 40, height: 40)
-            Image(systemName: "brain.head.profile")
-                .font(.title3).foregroundStyle(.blue.gradient)
-                .rotationEffect(.degrees(analysis.isAnalysing ? 360 : 0))
-                .animation(
-                    analysis.isAnalysing
-                        ? .linear(duration: 2).repeatForever(autoreverses: false)
-                        : .default,
-                    value: analysis.isAnalysing
-                )
-        }
-    }
-
-    private var expandButton: some View {
-        Button {
-            withAnimation(.spring(response: 0.3)) { isExpanded.toggle() }
-        } label: {
-            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white.opacity(0.6))
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(.white.opacity(0.08)))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Eval Badge
-
-struct ModernEvalBadge: View {
-    let scoreCP: Int
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text(String(format: "%+.2f", Double(scoreCP) / 100.0))
-                .font(.system(size: 15, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white).fixedSize()
-            Text("pawns")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.white.opacity(0.7))
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .frame(minWidth: 70)
-        .background(RoundedRectangle(cornerRadius: 10).fill(evalGradient))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.3), lineWidth: 1))
-    }
-
-    private var evalGradient: LinearGradient {
-        let color: Color = scoreCP > 0 ? .green : scoreCP < 0 ? .red : .gray
-        return LinearGradient(colors: [color.opacity(0.8), color.opacity(0.5)],
-                              startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
 
@@ -542,6 +445,7 @@ struct SettingsView: View {
                     gameCard
                     boardCard
                     analysisCard
+                    llmCard
                     engineCard
                 }
                 .padding(24)
@@ -613,8 +517,7 @@ struct SettingsView: View {
             SettingsRow(label: "Theme") {
                 HStack(spacing: 8) {
                     ForEach(BoardTheme.allCases) { theme in
-                        BoardThemeSwatch(theme: theme,
-                                         isSelected: game.boardTheme == theme)
+                        BoardThemeSwatch(theme: theme, isSelected: game.boardTheme == theme)
                             .onTapGesture { game.setBoardTheme(theme) }
                     }
                 }
@@ -630,8 +533,8 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 2)
-                    .padding(.leading, 4)
                 }
+                .padding(.leading, 8)
             }
         }
     }
@@ -650,6 +553,56 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented).frame(maxWidth: 180)
             }
+        }
+    }
+
+    private var llmCard: some View {
+        SettingsCard(title: "AI Commentary", icon: "text.bubble.fill", iconColor: .purple) {
+            SettingsRow(label: "Endpoint") {
+                TextField("http://localhost:11434", text: $settings.llmEndpoint)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
+                    .frame(maxWidth: 220).autocorrectionDisabled()
+            }
+            Divider().background(.white.opacity(0.1))
+            SettingsRow(label: "Model") {
+                TextField("llama3", text: $settings.llmModel)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
+                    .frame(maxWidth: 160).autocorrectionDisabled()
+            }
+            Divider().background(.white.opacity(0.1))
+            HStack {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(LLMHookService.shared.isAvailable ? Color.green : Color.red)
+                        .frame(width: 7, height: 7)
+                    Text(LLMHookService.shared.isAvailable
+                         ? "Connected · \(LLMHookService.shared.providerName)"
+                         : "Not connected")
+                        .font(.caption)
+                        .foregroundStyle(LLMHookService.shared.isAvailable ? .green : .red)
+                }
+                Spacer()
+                Button("Apply & Test") {
+                    LLMHookService.shared.configure(
+                        provider: LocalLLMProvider(
+                            endpoint: settings.llmEndpoint,
+                            model:    settings.llmModel
+                        )
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.purple.opacity(0.3)))
+                .foregroundStyle(.white)
+                .font(.subheadline.weight(.semibold))
+            }
+            Text("AI commentary appears in Analysis Mode only.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.35))
         }
     }
 
@@ -737,6 +690,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    .padding(.leading, 4)
                 }
             }
             Section("Analysis") {
@@ -747,6 +701,27 @@ struct SettingsView: View {
                     }.pickerStyle(.segmented).frame(maxWidth: 140)
                 }
             }
+            Section("AI Commentary") {
+                LabeledContent("Endpoint") {
+                    TextField("http://localhost:11434", text: $settings.llmEndpoint)
+                        .multilineTextAlignment(.trailing).autocorrectionDisabled()
+                        #if os(iOS)
+                        .keyboardType(.URL).textInputAutocapitalization(.never)
+                        #endif
+                }
+                LabeledContent("Model") {
+                    TextField("llama3", text: $settings.llmModel)
+                        .multilineTextAlignment(.trailing).autocorrectionDisabled()
+                }
+                Button("Apply & Test") {
+                    LLMHookService.shared.configure(
+                        provider: LocalLLMProvider(
+                            endpoint: settings.llmEndpoint,
+                            model:    settings.llmModel
+                        )
+                    )
+                }
+            }
             Section("Engine") {
                 LabeledContent("Think Time") {
                     HStack {
@@ -754,7 +729,8 @@ struct SettingsView: View {
                             get: { Double(settings.moveTimeMs) },
                             set: { settings.moveTimeMs = Int($0) }
                         ), in: 500...10000, step: 500)
-                        Text("\(settings.moveTimeMs)ms").monospacedDigit().frame(width: 70, alignment: .trailing)
+                        Text("\(settings.moveTimeMs)ms")
+                            .monospacedDigit().frame(width: 70, alignment: .trailing)
                     }
                 }
             }

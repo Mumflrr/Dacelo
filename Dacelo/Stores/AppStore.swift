@@ -29,7 +29,7 @@ final class AppStore: ObservableObject {
         self.gameStore   = game
         self.analysis    = ana
 
-        ana.observe(game)
+        ana.observe(game, settings: s)
     }
 
     // MARK: - Connection

@@ -18,7 +18,11 @@ final class AppSettings: ObservableObject {
     @AppStorage("hintCount")         var hintCount:         Int    = 1
     /// Active piece set folder name. Defaults to cburnett.
     @AppStorage("pieceSetName")      var pieceSetName:      String = "cburnett"
+    @AppStorage("llmEndpoint") var llmEndpoint: String = "http://localhost:11434"
+    @AppStorage("llmModel")    var llmModel:    String = "llama3"
+    // Also change in LLMHookService too?
 
     /// Strongly-typed piece set derived from the stored raw value.
     var pieceSet: PieceSet { PieceSet(rawValue: pieceSetName) ?? .cburnett }
+    
 }

@@ -8,7 +8,13 @@ struct DaceloApp: App {
     @StateObject private var app = AppStore()
 
     init() {
-            print(Bundle.main.url(forResource: "pw", withExtension: "svg", subdirectory: "Pieces/cburnett") ?? "NOT FOUND")
+        // Configure LLM — swap LocalLLMProvider for any other conforming provider
+        LLMHookService.shared.configure(
+            provider: LocalLLMProvider(
+                endpoint: "http://localhost:11434",
+                model: "llama3"
+            )
+        )
     }
     
     var body: some Scene {

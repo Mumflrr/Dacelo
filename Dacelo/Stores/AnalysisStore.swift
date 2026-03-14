@@ -10,18 +10,23 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Published State
 
-    @Published var moveCritiques: [MoveCritique] = []
-    @Published var lastFeedback: String          = ""
-    @Published var bestMoveArrow: (from: String, to: String)? = nil
-    @Published var isRequestingHint: Bool        = false
-    @Published var isAnalysing: Bool             = false
-    @Published var scoreCP: Int?                 = nil
-    @Published var currentCharacteristics: PositionCharacteristics? = nil
-    @Published var currentPV: [String]           = []
-    /// Index into moveCritiques for the currently-highlighted move card. nil = latest.
-    @Published var selectedCritiqueIndex: Int?   = nil
+    @Published var moveCritiques:          [MoveCritique]              = []
+    @Published var lastFeedback:           String                      = ""
+    @Published var bestMoveArrow:          (from: String, to: String)? = nil
+    @Published var isRequestingHint:       Bool                        = false
+    @Published var isAnalysing:            Bool                        = false
+    @Published var scoreCP:                Int?                        = nil
+    @Published var wdl:                    WDLResponse?                = nil
+    @Published var materialBalance:        Int?                        = nil
+    @Published var mobilityWhite:          Int?                        = nil
+    @Published var mobilityBlack:          Int?                        = nil
+    @Published var depth:                  Int?                        = nil
+    @Published var nodes:                  Int?                        = nil
+    @Published var currentCharacteristics: PositionCharacteristics?    = nil
+    @Published var currentPV:             [String]                     = []
+    @Published var selectedCritiqueIndex:  Int?                        = nil
 
-    var canGoBack: Bool    { !moveCritiques.isEmpty && (selectedCritiqueIndex ?? moveCritiques.count - 1) > 0 }
+    var canGoBack:    Bool { !moveCritiques.isEmpty && (selectedCritiqueIndex ?? moveCritiques.count - 1) > 0 }
     var canGoForward: Bool { selectedCritiqueIndex != nil && selectedCritiqueIndex! < moveCritiques.count - 1 }
 
     func goBack() {
@@ -37,13 +42,13 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Private
 
-    private let engine: EngineService
-    private weak var gameStore:   GameStore?
-    private weak var appSettings: AppSettings?
+    private let engine:       EngineService
+    private weak var gameStore:    GameStore?
+    private weak var appSettings:  AppSettings?
     private var cancellables: Set<AnyCancellable> = []
 
-    private var prevEval: Int? = nil
-    private var moveCount: Int = 0
+    private var prevEval:  Int? = nil
+    private var moveCount: Int  = 0
     private var tail: Task<Void, Never>?
 
     // MARK: - Init
@@ -65,7 +70,6 @@ final class AnalysisStore: ObservableObject {
             .removeDuplicates { $0.board.FEN == $1.board.FEN }
             .dropFirst()
             .sink { [weak self] game in
-                // Dispatch to avoid publishing changes during view updates
                 DispatchQueue.main.async {
                     self?.handlePositionChange(game)
                 }
@@ -74,8 +78,7 @@ final class AnalysisStore: ObservableObject {
     }
 
     // MARK: - Hint
-    /// Requests the best move arrow. Loading indicator stays on until the arrow
-    /// is visible. Arrow persists until the next move is made.
+
     func requestHint(count: Int = 1) {
         guard let fen = gameStore?.currentFEN, !fen.isEmpty else { return }
         guard !isRequestingHint else { return }
@@ -90,7 +93,6 @@ final class AnalysisStore: ObservableObject {
             } catch {
                 print("[AnalysisStore] Hint failed: \(error.localizedDescription)")
             }
-            // Stop loading only after the arrow has been set (or failed)
             isRequestingHint = false
         }
     }
@@ -101,12 +103,19 @@ final class AnalysisStore: ObservableObject {
         prevEval  = nil
         moveCount = 0
         clearLivePanel()
+        LLMHookService.shared.clearNarrative()
     }
 
     func clearLivePanel() {
         lastFeedback           = ""
         bestMoveArrow          = nil
         scoreCP                = nil
+        wdl                    = nil
+        materialBalance        = nil
+        mobilityWhite          = nil
+        mobilityBlack          = nil
+        depth                  = nil
+        nodes                  = nil
         currentCharacteristics = nil
         currentPV              = []
     }
@@ -114,37 +123,28 @@ final class AnalysisStore: ObservableObject {
     // MARK: - Position change handler
 
     private func handlePositionChange(_ game: Chess.Game) {
-        let fen      = game.board.FEN
-        // Starting position — don't analyse, happens after newGame() resets the board.
+        let fen = game.board.FEN
         guard !fen.hasPrefix("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR") else { return }
 
-        // A move was made — clear any displayed hint arrow
         bestMoveArrow = nil
 
-        let fenParts = fen.split(separator: " ").map(String.init)
-
+        let fenParts      = fen.split(separator: " ").map(String.init)
         let activeColor   = fenParts.count > 1 ? fenParts[1] : "w"
         let sideJustMoved = activeColor == "w" ? "black" : "white"
 
         let fullMove   = Int(fenParts.count > 5 ? fenParts[5] : "1") ?? 1
-        // FEN fullmove increments AFTER black's move (active becomes "w").
-        // • white just moved → active = "b", fullMove = N  → display N
-        // • black just moved → active = "w", fullMove = N+1 → display N = fullMove - 1
         let displayNum = sideJustMoved == "white" ? fullMove : max(1, fullMove - 1)
         let movePrefix = sideJustMoved == "white" ? "\(displayNum)." : "\(displayNum)..."
 
-        // Extract the last UCI move from game.board.turns.
-        // Each Chess.Turn has a .white and optional .black Chess.Move.
-        // The last played move is black's move in the last turn if it exists,
-        // otherwise white's move in the last turn.
-        let lastUCI: String
         let lastMove: Chess.Move? = {
             guard let lastTurn = game.board.turns.last else { return nil }
             return lastTurn.black ?? lastTurn.white
         }()
-        if let move = lastMove,
-           move.start.isBoardPosition,
-           move.end.isBoardPosition {
+
+        let lastUCI: String = {
+            guard let move = lastMove,
+                  move.start.isBoardPosition,
+                  move.end.isBoardPosition else { return "" }
             let from = move.start.FEN
             let to   = move.end.FEN
             var uci  = from + to
@@ -157,13 +157,9 @@ final class AnalysisStore: ObservableObject {
                 default:      break
                 }
             }
-            lastUCI = uci
-        } else {
-            lastUCI = ""
-        }
+            return uci
+        }()
 
-        // Extract piece type from the destination square after the move.
-        // Since Position is just Int, move.end is the board index directly.
         let pieceType: String = {
             guard let move = lastMove, move.end.isBoardPosition else { return "p" }
             let destPiece = game.board.squares[move.end].piece
@@ -178,19 +174,21 @@ final class AnalysisStore: ObservableObject {
         }()
 
         moveCount += 1
-        let capturedMoveCount = moveCount
-        let capturedPrevEval  = prevEval
-        let capturedPieceType = pieceType
+        let capturedMoveCount  = moveCount
+        let capturedPrevEval   = prevEval
+        let capturedPieceType  = pieceType
+        let isAnalysisMode     = gameStore?.gameMode == .analysisOnly
 
         enqueue {
             await self.runMoveAnalysis(
-                fen:        fen,
-                side:       sideJustMoved,
-                movePrefix: movePrefix,
-                lastUCI:    lastUCI,
-                pieceType:  capturedPieceType,
-                moveNumber: capturedMoveCount,
-                prevEval:   capturedPrevEval
+                fen:            fen,
+                side:           sideJustMoved,
+                movePrefix:     movePrefix,
+                lastUCI:        lastUCI,
+                pieceType:      capturedPieceType,
+                moveNumber:     capturedMoveCount,
+                prevEval:       capturedPrevEval,
+                isAnalysisMode: isAnalysisMode
             )
         }
     }
@@ -198,13 +196,14 @@ final class AnalysisStore: ObservableObject {
     // MARK: - Analysis
 
     private func runMoveAnalysis(
-        fen: String,
-        side: String,
-        movePrefix: String,   // e.g. "1." or "3..."
-        lastUCI: String,      // e.g. "e2e4" — the actual move just played
-        pieceType: String,    // "p","n","b","r","q","k"
-        moveNumber: Int,
-        prevEval: Int?
+        fen:            String,
+        side:           String,
+        movePrefix:     String,
+        lastUCI:        String,
+        pieceType:      String,
+        moveNumber:     Int,
+        prevEval:       Int?,
+        isAnalysisMode: Bool
     ) async {
         isAnalysing = true
         defer { isAnalysing = false }
@@ -212,12 +211,15 @@ final class AnalysisStore: ObservableObject {
         do {
             let result = try await engine.analyse(fen: fen, movetime: 2000)
 
-            let fenParts    = fen.split(separator: " ").map(String.init)
-            let activeColor = fenParts.count > 1 ? fenParts[1] : "w"
-            let normScore   = normalise(cp: result.score_cp, activeColor: activeColor)
+            let fenParts      = fen.split(separator: " ").map(String.init)
+            let activeColor   = fenParts.count > 1 ? fenParts[1] : "w"
+            let normScore     = normalise(cp: result.score_cp, activeColor: activeColor)
+
+            // Use 0 as baseline for first move so classification works correctly.
+            let effectivePrevEval = prevEval ?? 0
 
             let classification = classifyMove(
-                prevEval:     prevEval,
+                prevEval:     effectivePrevEval,
                 currEval:     normScore,
                 side:         side,
                 alternatives: result.alternatives,
@@ -234,6 +236,14 @@ final class AnalysisStore: ObservableObject {
                 )
             }
 
+            let cpLoss: Int? = {
+                guard let curr = normScore else { return nil }
+                let loss = side == "white"
+                    ? (effectivePrevEval - curr)
+                    : (curr - effectivePrevEval)
+                return max(0, loss)
+            }()
+
             let critique = MoveCritique(
                 moveNumber:      moveNumber,
                 side:            side,
@@ -246,17 +256,52 @@ final class AnalysisStore: ObservableObject {
                 comment:         classification.comment,
                 alternatives:    alternatives,
                 characteristics: result.characteristics,
-                suggestedLine:   result.pv ?? [],
+                suggestedLine:   result.pv ?? []
             )
 
             moveCritiques.append(critique)
 
             self.prevEval               = normScore
             self.scoreCP                = normScore
+            self.wdl                    = result.wdl
+            self.materialBalance        = result.material_balance
+            self.mobilityWhite          = result.mobility_white
+            self.mobilityBlack          = result.mobility_black
+            self.depth                  = result.depth
+            self.nodes                  = result.nodes
             self.lastFeedback           = result.feedback ?? ""
             self.currentCharacteristics = result.characteristics
             self.currentPV              = result.pv ?? []
-            // Best-move arrow is shown only via hint — analysis never sets it
+
+            // Fire LLM hook in analysis mode only
+            if isAnalysisMode {
+                let ctx = LLMAnalysisContext(
+                    fen:               fen,
+                    movePlayed:        lastUCI,
+                    side:              side,
+                    moveNotation:      movePrefix,
+                    wdl:               result.wdl.map {
+                        WDLContext(white: $0.white, draw: $0.draw, black: $0.black)
+                    },
+                    scoreCP:           normScore,
+                    confidence:        result.characteristics?.confidence ?? "Uncertain",
+                    pvLine:            result.pv ?? [],
+                    materialBalance:   result.material_balance ?? 0,
+                    mobilityWhite:     result.mobility_white ?? 0,
+                    mobilityBlack:     result.mobility_black ?? 0,
+                    moveClassification: classification.quality.rawValue,
+                    cpLoss:            cpLoss,
+                    sharpness:         result.characteristics?.sharpness ?? "Balanced",
+                    difficulty:        result.characteristics?.difficulty ?? "Intermediate",
+                    lineType:          result.characteristics?.line_type ?? "Quiet",
+                    alternatives:      alternatives.map {
+                        LLMAlternative(move: $0.move, scoreCP: $0.scoreCP)
+                    },
+                    depth:             result.depth,
+                    nodes:             result.nodes
+                )
+                LLMHookService.shared.analyse(context: ctx)
+            }
 
         } catch {
             print("[AnalysisStore] Analysis failed: \(error.localizedDescription)")
@@ -283,54 +328,44 @@ final class AnalysisStore: ObservableObject {
     // MARK: - Move classification
 
     private func classifyMove(
-        prevEval: Int?,
-        currEval: Int?,
-        side: String,
+        prevEval:     Int,
+        currEval:     Int?,
+        side:         String,
         alternatives: [AlternativeMoveResponse]?,
-        activeColor: String
+        activeColor:  String
     ) -> (quality: MoveQuality, comment: String) {
 
-        let prev = prevEval ?? 0
-        guard let curr = currEval else { return (.unknown, "") }
+        guard let curr = currEval else {
+            return (.unknown, "")
+        }
 
-        // Positive cpLoss = position got worse for the mover
-        let cpLoss = side == "white" ? (prev - curr) : (curr - prev)
-
-        // Best alternative move string for suggestions
-        let bestAlt: AlternativeMoveResponse? = alternatives?.first(where: { $0.score_cp != nil })
-        let bestMove = bestAlt?.move ?? ""
+        let cpLoss    = side == "white" ? (prevEval - curr) : (curr - prevEval)
+        let bestAlt   = alternatives?.first(where: { $0.score_cp != nil })
+        let bestMove  = bestAlt?.move ?? ""
         let betterStr = bestMove.isEmpty ? "" : " Engine prefers \(formatUCI(bestMove))."
-
         let lostPawns = Double(max(0, cpLoss)) / 100.0
 
         switch cpLoss {
         case ..<10:
-            return (.excellent,
-                    "Best move! The engine agrees this is the top choice.")
+            return (.excellent, "Best move! The engine agrees this is the top choice.")
         case ..<25:
-            let cp = cpLoss
-            return (.good,
-                    "Good move — only \(cp)cp from optimal.\(betterStr)")
+            return (.good, "Good move — only \(cpLoss)cp from optimal.\(betterStr)")
         case ..<50:
             return (.inaccuracy,
-                    String(format: "Inaccuracy — %.2f pawns from optimal.\(betterStr) "
-                           + "A better continuation was available.", lostPawns))
+                    String(format: "Inaccuracy — %.2f pawns from optimal.\(betterStr) A better continuation was available.", lostPawns))
         case ..<100:
             return (.mistake,
-                    String(format: "Mistake — %.2f pawns lost.\(betterStr) "
-                           + "This significantly weakens your position.", lostPawns))
+                    String(format: "Mistake — %.2f pawns lost.\(betterStr) This significantly weakens your position.", lostPawns))
         default:
             return (.blunder,
-                    String(format: "Blunder — %.2f pawns lost!\(betterStr) "
-                           + "This fundamentally changes the game's outcome.", lostPawns))
+                    String(format: "Blunder — %.2f pawns lost!\(betterStr) This fundamentally changes the game's outcome.", lostPawns))
         }
     }
 
-    /// Format a UCI move (e.g. "e2e4") as a readable "e2→e4" string.
     private func formatUCI(_ uci: String) -> String {
         guard uci.count >= 4 else { return uci }
-        let from = String(uci.prefix(2))
-        let to   = String(uci.dropFirst(2).prefix(2))
+        let from  = String(uci.prefix(2))
+        let to    = String(uci.dropFirst(2).prefix(2))
         let promo = uci.count > 4 ? "=\(uci.suffix(1).uppercased())" : ""
         return "\(from)→\(to)\(promo)"
     }
