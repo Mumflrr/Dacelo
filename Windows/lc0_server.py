@@ -267,8 +267,8 @@ def parse_stockfish_eval(info_lines: list) -> Optional[dict]:
             break
     return terms if terms else None
 
-
-
+def score_to_feedback(score_cp: Optional[int],
+                      score_mate: Optional[int],
                       side_to_move: str = "w") -> str:
     if score_mate is not None:
         if side_to_move == "w":
@@ -286,12 +286,19 @@ def parse_stockfish_eval(info_lines: list) -> Optional[dict]:
     if side_to_move == "b":
         cp = -cp
 
-    if abs(cp) < 0.2:   return "The position is roughly equal."
+    if abs(cp) < 0.2:
+        return "The position is roughly equal."
+
     favour = "White" if cp > 0 else "Black"
-    if abs(cp) < 0.5:   return f"Slight advantage for {favour} ({cp:+.2f})."
-    elif abs(cp) < 1.5: return f"Clear advantage for {favour} ({cp:+.2f})."
-    elif abs(cp) < 3.0: return f"Large advantage for {favour} ({cp:+.2f})."
-    else:               return f"{favour} is winning ({cp:+.2f})."
+
+    if abs(cp) < 0.5:
+        return f"Slight advantage for {favour} ({cp:+.2f})."
+    elif abs(cp) < 1.5:
+        return f"Clear advantage for {favour} ({cp:+.2f})."
+    elif abs(cp) < 3.0:
+        return f"Large advantage for {favour} ({cp:+.2f})."
+    else:
+        return f"{favour} is winning ({cp:+.2f})."
 
 
 def uci_to_parts(move: str) -> tuple:
@@ -620,51 +627,6 @@ class UCIEngine:
             "nodes":      best_nodes,
             "nnue":       nnue,
         }
-
-
-        while not self._queue.empty():
-            self._queue.get_nowait()
-
-        self._send(f"position fen {fen}")
-        self._send(f"go movetime {movetime_ms}")
-
-        best_depth = 0
-        best_nodes = 0
-        timeout    = (movetime_ms / 1000.0) + 15.0
-
-        while True:
-            try:
-                line = await asyncio.wait_for(self._queue.get(), timeout=timeout)
-            except asyncio.TimeoutError:
-                log.error("Timeout waiting for engine move (fen=%s)", fen)
-                self._send("stop")
-                raise
-
-            if line.startswith("info"):
-                parts = line.split()
-                try:
-                    if "depth" in parts:
-                        d = int(parts[parts.index("depth") + 1])
-                        if d > best_depth:
-                            best_depth = d
-                    if "nodes" in parts:
-                        best_nodes = int(parts[parts.index("nodes") + 1])
-                except (ValueError, IndexError):
-                    pass
-
-            elif line.startswith("bestmove"):
-                parts    = line.split()
-                bestmove = parts[1] if len(parts) > 1 else None
-                if bestmove == "(none)":
-                    bestmove = None
-                return {
-                    "bestmove":   bestmove,
-                    "score_cp":   None,
-                    "score_mate": None,
-                    "pv":         [],
-                    "depth":      best_depth,
-                    "nodes":      best_nodes,
-                }
 
 
 # ── WebSocket Server ──────────────────────────────────────────────────────────
