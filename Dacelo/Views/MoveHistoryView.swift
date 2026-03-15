@@ -506,7 +506,7 @@ struct AlternativeLineRow: View {
                     ],
                     characteristics: PositionCharacteristics(
                         sharpness: "Balanced", difficulty: "Beginner",
-                        margin_for_error: "Forgiving", line_type: "Flexible",
+                        margin_for_error: "Forgiving", line_type: "Flexible", confidence: "Confident",
                         explanation: "Engine rates this +0.35 pawns in White's favour."
                     ),
                     suggestedLine: ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]

@@ -110,22 +110,23 @@ final class DisabledLLMProvider: LLMHookProvider {
 
 final class LocalLLMProvider: LLMHookProvider {
     let name: String
-    let endpoint: String
-    let model: String
+        
+    // 1. Hold a reference to your settings store
+    let settings: AppSettings
 
-    init(
-        name:     String = "Local LLM",
-        endpoint: String = "http://localhost:11434",
-        model:    String = "llama3"
-    ) {
+    // 2. Pass AppSettings into the initializer instead of strings
+    init(name: String = "Local LLM", settings: AppSettings) {
         self.name     = name
-        self.endpoint = endpoint
-        self.model    = model
+        self.settings = settings
     }
+
+    // 3. Make endpoint and model computed properties so they always fetch the latest value
+    var endpoint: String { settings.llmEndpoint } // Replace with your actual property name in AppSettings
+    var model: String { settings.llmModel }       // Replace with your actual property name in AppSettings
 
     var isAvailable: Bool {
         get async {
-            // Ping the Ollama /api/tags endpoint to check if the server is up
+            // This now automatically uses the `endpoint` from your settings!
             guard let url = URL(string: "\(endpoint)/api/tags") else { return false }
             do {
                 let (_, response) = try await URLSession.shared.data(from: url)

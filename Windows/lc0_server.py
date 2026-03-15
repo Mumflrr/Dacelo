@@ -230,7 +230,45 @@ def position_characteristics(
 
 # ── Score Feedback ────────────────────────────────────────────────────────────
 
-def score_to_feedback(score_cp: Optional[int], score_mate: Optional[int],
+def parse_stockfish_eval(info_lines: list) -> Optional[dict]:
+    """
+    Parse Stockfish's 'info string' NNUE eval breakdown.
+    Stockfish prints lines like:
+      info string NNUE evaluation using ...
+      info string    Term |    White    |    Black    |    Total
+      info string   Material | ...
+    Returns a dict of term -> {white, black, total} in pawns, or None.
+    """
+    terms = {}
+    in_table = False
+    for line in info_lines:
+        if "NNUE evaluation" in line or "Classical evaluation" in line:
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        # Skip header/separator lines
+        if "Term" in line or "---" in line or "Total" in line and "term" not in line.lower():
+            continue
+        # Parse data rows: "  Material |  +1.20  |  -1.20  |  +0.00"
+        parts = [p.strip() for p in line.replace("info string", "").split("|")]
+        if len(parts) >= 4:
+            name = parts[0].strip().lower().replace(" ", "_")
+            try:
+                w = float(parts[1])
+                b = float(parts[2])
+                t = float(parts[3])
+                if name:
+                    terms[name] = {"white": w, "black": b, "total": t}
+            except ValueError:
+                pass
+        # Stop after the final total line
+        if "final" in line.lower() or (in_table and not line.strip()):
+            break
+    return terms if terms else None
+
+
+
                       side_to_move: str = "w") -> str:
     if score_mate is not None:
         if side_to_move == "w":
@@ -517,7 +555,73 @@ class UCIEngine:
             "characteristics": chars,
         }
 
-    async def get_engine_move(self, fen: str, movetime_ms: int = 3000) -> dict:
+    async def analyse_stockfish(self, fen: str, movetime_ms: int = 2000) -> dict:
+        """
+        Run Stockfish analysis. Caller MUST hold the stockfish engine lock.
+        Collects NNUE eval breakdown from 'info string' lines.
+        MultiPV is not needed for Stockfish eval — we just want the score and breakdown.
+        """
+        while not self._queue.empty():
+            self._queue.get_nowait()
+
+        self._send(f"position fen {fen}")
+        self._send(f"go movetime {movetime_ms}")
+
+        best_cp    = None
+        best_mate  = None
+        best_move  = None
+        best_depth = 0
+        best_nodes = 0
+        info_strings: list[str] = []
+        timeout    = (movetime_ms / 1000.0) + 15.0
+
+        while True:
+            try:
+                line = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                log.error("Stockfish timeout (fen=%s)", fen)
+                self._send("stop")
+                raise
+
+            if line.startswith("info string"):
+                info_strings.append(line)
+            elif line.startswith("info"):
+                parts = line.split()
+                try:
+                    if "score" in parts:
+                        si   = parts.index("score")
+                        kind = parts[si + 1]
+                        val  = int(parts[si + 2])
+                        if kind == "cp":
+                            best_cp   = val
+                            best_mate = None
+                        elif kind == "mate":
+                            best_mate = val
+                            best_cp   = None
+                    if "depth" in parts:
+                        d = int(parts[parts.index("depth") + 1])
+                        if d > best_depth:
+                            best_depth = d
+                    if "nodes" in parts:
+                        best_nodes = int(parts[parts.index("nodes") + 1])
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith("bestmove"):
+                p = line.split()
+                best_move = p[1] if len(p) > 1 and p[1] != "(none)" else None
+                break
+
+        nnue = parse_stockfish_eval(info_strings)
+        return {
+            "bestmove":   best_move,
+            "score_cp":   best_cp,
+            "score_mate": best_mate,
+            "depth":      best_depth,
+            "nodes":      best_nodes,
+            "nnue":       nnue,
+        }
+
+
         while not self._queue.empty():
             self._queue.get_nowait()
 
@@ -566,12 +670,15 @@ class UCIEngine:
 # ── WebSocket Server ──────────────────────────────────────────────────────────
 
 class Lc0Server:
-    def __init__(self, engine: UCIEngine, host: str = "0.0.0.0", port: int = 8765):
-        self.engine = engine
-        self.host   = host
-        self.port   = port
+    def __init__(self, engine: UCIEngine, host: str = "0.0.0.0", port: int = 8765,
+                 stockfish: Optional["UCIEngine"] = None):
+        self.engine    = engine
+        self.stockfish = stockfish
+        self.host      = host
+        self.port      = port
         self._clients: set = set()
-        self._engine_lock = asyncio.Lock()
+        self._engine_lock    = asyncio.Lock()
+        self._stockfish_lock = asyncio.Lock()
 
     async def handle(self, ws):
         self._clients.add(ws)
@@ -600,48 +707,65 @@ class Lc0Server:
             await ws.send(json.dumps({"type": "new_game_ok"}))
 
         elif cmd == "analyse":
-            fen      = msg.get("fen", "")
-            movetime = int(msg.get("movetime", 2000))
+            fen                  = msg.get("fen", "")
+            movetime             = int(msg.get("movetime", 2000))
+            use_sf_eval          = bool(msg.get("use_stockfish_eval", False))
+            use_sf_bestmove      = bool(msg.get("use_stockfish_bestmove", False))
+            deep                 = bool(msg.get("deep", False))  # analysis mode: run both
             if not fen:
                 await ws.send(json.dumps({"type": "error", "message": "Missing 'fen'"}))
                 return
-            log.info("Analysing FEN: %s (movetime=%dms)", fen, movetime)
+            log.info("Analysing FEN: %s (movetime=%dms, sf_eval=%s, sf_bm=%s, deep=%s)",
+                     fen, movetime, use_sf_eval, use_sf_bestmove, deep)
             try:
+                # ── lc0 analysis (always runs for WDL, MultiPV, characteristics) ──
                 async with self._engine_lock:
-                    result = await self.engine.analyse(fen, movetime)
+                    lc0_result = await self.engine.analyse(fen, movetime)
 
-                from_sq, to_sq, promo = uci_to_parts(result["bestmove"] or "")
+                # ── Stockfish analysis (optional or deep mode) ──────────────────
+                sf_result = None
+                if self.stockfish and (use_sf_eval or use_sf_bestmove or deep):
+                    sf_movetime = movetime if not deep else max(movetime, 3000)
+                    async with self._stockfish_lock:
+                        sf_result = await self.stockfish.analyse_stockfish(fen, sf_movetime)
+
+                # ── Merge: pick score and bestmove source based on flags ─────────
+                score_cp   = sf_result["score_cp"]   if (use_sf_eval and sf_result)   else lc0_result["score_cp"]
+                score_mate = sf_result["score_mate"]  if (use_sf_eval and sf_result)   else lc0_result["score_mate"]
+                bestmove   = sf_result["bestmove"]    if (use_sf_bestmove and sf_result) else lc0_result["bestmove"]
+
+                from_sq, to_sq, promo = uci_to_parts(bestmove or "")
                 side_to_move = fen.split()[1] if len(fen.split()) > 1 else "w"
 
-                # Tag alternatives with from/to for the client
                 tagged_alts = []
-                for alt in result.get("alternatives", []):
+                for alt in lc0_result.get("alternatives", []):
                     f, t, p = uci_to_parts(alt.get("move") or "")
                     tagged_alts.append({**alt, "from": f, "to": t, "promotion": p})
 
                 await ws.send(json.dumps({
                     "type":             "analysis",
                     "fen":              fen,
-                    "bestmove":         result["bestmove"],
+                    "bestmove":         bestmove,
                     "from":             from_sq,
                     "to":               to_sq,
                     "promotion":        promo,
-                    "score_cp":         result["score_cp"],
-                    "score_mate":       result["score_mate"],
-                    "pv":               result["pv"][:8],
-                    "depth":            result["depth"],
-                    "nodes":            result["nodes"],
-                    "score_drift":      result["score_drift"],
-                    "wdl":              result["wdl"],
-                    "material_balance": result["material_balance"],
-                    "mobility_white":   result["mobility_white"],
-                    "mobility_black":   result["mobility_black"],
-                    "feedback":         score_to_feedback(
-                                            result["score_cp"],
-                                            result["score_mate"],
-                                            side_to_move),
+                    "score_cp":         score_cp,
+                    "score_mate":       score_mate,
+                    "pv":               lc0_result["pv"][:8],
+                    "depth":            lc0_result["depth"],
+                    "nodes":            lc0_result["nodes"],
+                    "score_drift":      lc0_result["score_drift"],
+                    "wdl":              lc0_result["wdl"],
+                    "material_balance": lc0_result["material_balance"],
+                    "mobility_white":   lc0_result["mobility_white"],
+                    "mobility_black":   lc0_result["mobility_black"],
+                    "feedback":         score_to_feedback(score_cp, score_mate, side_to_move),
                     "alternatives":     tagged_alts,
-                    "characteristics":  result.get("characteristics"),
+                    "characteristics":  lc0_result.get("characteristics"),
+                    # Deep / Stockfish extras — null when not requested
+                    "sf_score_cp":      sf_result["score_cp"]   if sf_result else None,
+                    "sf_depth":         sf_result["depth"]       if sf_result else None,
+                    "nnue":             sf_result["nnue"]         if sf_result else None,
                 }))
             except asyncio.TimeoutError:
                 await ws.send(json.dumps({"type": "error", "message": "Engine timeout"}))
@@ -704,11 +828,13 @@ def _stdin_quit_watcher(loop: asyncio.AbstractEventLoop):
 
 def parse_args():
     p = argparse.ArgumentParser(description="lc0 WebSocket Bridge")
-    p.add_argument("--lc0",     default=r"lc0\lc0.exe",    help="Path to lc0.exe")
-    p.add_argument("--weights", default=r"lc0\BT4-332.pb", help="Path to weights (.pb)")
-    p.add_argument("--port",    type=int, default=8765,     help="WebSocket port")
-    p.add_argument("--host",    default="0.0.0.0",          help="Bind address")
-    p.add_argument("--threads", type=int, default=4,        help="UCI Threads option")
+    p.add_argument("--lc0",        default=r"lc0\lc0.exe",         help="Path to lc0.exe")
+    p.add_argument("--weights",    default=r"lc0\BT4-332.pb",      help="Path to weights (.pb)")
+    p.add_argument("--stockfish",  default="",                      help="Path to stockfish binary (optional)")
+    p.add_argument("--port",       type=int, default=8765,          help="WebSocket port")
+    p.add_argument("--host",       default="0.0.0.0",               help="Bind address")
+    p.add_argument("--threads",    type=int, default=4,             help="UCI Threads (lc0)")
+    p.add_argument("--sf-threads", type=int, default=4,             help="UCI Threads (Stockfish)")
     return p.parse_args()
 
 
@@ -716,31 +842,53 @@ async def main():
     args         = parse_args()
     lc0_path     = os.path.abspath(args.lc0)
     weights_path = os.path.abspath(args.weights)
+    sf_path      = os.path.abspath(args.stockfish) if args.stockfish else None
+
     log.info("lc0 exe     : %s  (exists=%s)", lc0_path,     os.path.exists(lc0_path))
     log.info("weights     : %s  (exists=%s)", weights_path, os.path.exists(weights_path))
+    if sf_path:
+        log.info("stockfish   : %s  (exists=%s)", sf_path, os.path.exists(sf_path))
+    else:
+        log.info("stockfish   : not configured (deep analysis disabled)")
     log.info("port        : %d", args.port)
-    log.info("threads     : %d", args.threads)
     log.info("python-chess: %s", "available" if HAS_CHESS else "NOT INSTALLED — pip install python-chess")
 
-    engine = UCIEngine(lc0_path=lc0_path, model_path=weights_path)
     loop   = asyncio.get_running_loop()
+
+    # lc0
+    engine = UCIEngine(lc0_path=lc0_path, model_path=weights_path)
     engine.start(loop)
+
+    # Stockfish (optional)
+    stockfish = None
+    if sf_path and os.path.exists(sf_path):
+        stockfish = UCIEngine(lc0_path=sf_path)  # reuses UCIEngine, no weights needed
+        stockfish.start(loop)
 
     threading.Thread(target=_stdin_quit_watcher, args=(loop,), daemon=True).start()
 
-    log.info("Waiting for UCI handshake …")
+    log.info("Waiting for lc0 UCI handshake …")
     await engine.wait_ready()
-
     engine.set_option("Threads", str(args.threads))
-    engine.set_option("MultiPV",  str(MULTI_PV))
+    engine.set_option("MultiPV", str(MULTI_PV))
 
-    server = Lc0Server(engine, host=args.host, port=args.port)
+    if stockfish:
+        log.info("Waiting for Stockfish UCI handshake …")
+        await stockfish.wait_ready()
+        stockfish.set_option("Threads", str(args.sf_threads))
+        # Enable NNUE eval output
+        stockfish.set_option("Use NNUE", "true")
+        log.info("Stockfish ready")
+
+    server = Lc0Server(engine, host=args.host, port=args.port, stockfish=stockfish)
     try:
         await server.run()
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Shutting down…")
     finally:
         engine.stop()
+        if stockfish:
+            stockfish.stop()
 
 
 if __name__ == "__main__":

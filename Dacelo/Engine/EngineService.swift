@@ -81,11 +81,24 @@ actor EngineService: NSObject {
 
     // MARK: - Public API
 
-    func analyse(fen: String, movetime: Int = 2000) async throws -> AnalysisResponse {
+    func analyse(
+        fen: String,
+        movetime: Int = 2000,
+        useStockfishEval: Bool = false,
+        useStockfishBestMove: Bool = false,
+        deep: Bool = false
+    ) async throws -> AnalysisResponse {
         let data = try await request(
-            ["cmd": "analyse", "fen": fen, "movetime": movetime],
+            [
+                "cmd":                    "analyse",
+                "fen":                    fen,
+                "movetime":               movetime,
+                "use_stockfish_eval":     useStockfishEval,
+                "use_stockfish_bestmove": useStockfishBestMove,
+                "deep":                   deep,
+            ],
             expectedTypes: ["analysis"],
-            timeout: Double(movetime) / 1000.0 + 15.0
+            timeout: Double(movetime) / 1000.0 + (deep ? 20.0 : 15.0)
         )
         let result = try decode(AnalysisResponse.self, from: data)
         if result.type == "error" { throw EngineError.serverError(result.message ?? "unknown") }

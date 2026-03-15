@@ -33,6 +33,12 @@ struct WDLResponse: Decodable {
 
 // MARK: - Wire responses
 
+struct NNUETerm: Decodable {
+    let white: Double
+    let black: Double
+    let total: Double
+}
+
 struct AnalysisResponse: Decodable {
     let type:             String
     let fen:              String?
@@ -45,19 +51,19 @@ struct AnalysisResponse: Decodable {
     let pv:               [String]?
     let depth:            Int?
     let nodes:            Int?
-    /// Max centipawn drift across search depths — measures engine confidence.
     let score_drift:      Int?
-    /// Win/Draw/Loss probabilities from lc0's neural network (0.0–1.0 each).
     let wdl:              WDLResponse?
-    /// Material balance in pawn units, white-positive.
     let material_balance: Int?
-    /// Legal move count for each side — proxy for piece activity.
     let mobility_white:   Int?
     let mobility_black:   Int?
     let feedback:         String?
     let message:          String?
     let alternatives:     [AlternativeMoveResponse]?
     let characteristics:  PositionCharacteristics?
+    // Stockfish extras — nil when Stockfish not configured or not requested
+    let sf_score_cp:      Int?
+    let sf_depth:         Int?
+    let nnue:             [String: NNUETerm]?
 }
 
 struct AlternativeMoveResponse: Decodable {

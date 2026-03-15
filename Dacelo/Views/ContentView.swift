@@ -16,21 +16,39 @@ struct ContentView: View {
     @EnvironmentObject var analysis: AnalysisStore
     @EnvironmentObject var settings: AppSettings
 
+    // 1. Define your two sets of gradient stops for morphing
+    private var defaultStops: [Gradient.Stop] {
+        [
+            .init(color: .black,                location: 0.00),
+            .init(color: .blue.opacity(0.18),   location: 0.45),
+            .init(color: .purple.opacity(0.22), location: 0.75),
+            .init(color: .black.opacity(0.90),  location: 0.99)
+        ]
+    }
+
+    private var analysisStops: [Gradient.Stop] {
+        [
+            .init(color: .black,                 location: 0.00),
+            .init(color: .indigo.opacity(0.35),  location: 0.35),
+            .init(color: .purple.opacity(0.45),  location: 0.85),
+            .init(color: .black.opacity(0.95),   location: 1.00)
+        ]
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
+                
+                // 2. Use the computed stops and add the animation modifier
                 LinearGradient(
-                    stops: [
-                        .init(color: .black,                location: 0.00),
-                        .init(color: .blue.opacity(0.18),   location: 0.45),
-                        .init(color: .purple.opacity(0.22), location: 0.75),
-                        .init(color: .black.opacity(0.90),  location: 1.00),
-                    ],
+                    stops: game.gameMode == .analysisOnly ? analysisStops : defaultStops,
                     startPoint: .topLeading,
                     endPoint:   .bottomTrailing
                 )
                 .ignoresSafeArea()
+                .animation(.easeInOut(duration: 0.8), value: game.gameMode)
+                
                 #if os(macOS)
                 macOSLayout
                 #else
@@ -47,6 +65,19 @@ struct ContentView: View {
                     ConnectionToolbarItem()
                         .environmentObject(app.engine.state)
                         .environmentObject(app)
+                    
+                    Button {
+                        let next: GameMode = game.gameMode == .analysisOnly ? .humanVsEngine : .analysisOnly
+                        // 3. Wrap the state change in withAnimation to smooth the icon transition
+                        withAnimation(.easeInOut(duration: 0.8)) {
+                            game.gameMode = next
+                        }
+                        app.newGame()
+                    } label: {
+                        Image(systemName: game.gameMode == .analysisOnly ? "chart.xyaxis.line" : "chart.xyaxis.line")
+                            .foregroundStyle(game.gameMode == .analysisOnly ? .purple : .secondary)
+                    }
+                    
                     NavigationLink {
                         SettingsView()
                             .environmentObject(app)
@@ -544,7 +575,9 @@ struct SettingsView: View {
             SettingsRow(label: "Show best-move arrow") {
                 Toggle("", isOn: $settings.showBestMoveArrow).labelsHidden()
             }
+                
             Divider().background(.white.opacity(0.1))
+                
             SettingsRow(label: "Hint arrows") {
                 Picker("", selection: $settings.hintCount) {
                     Text("1 (Best)").tag(1)
@@ -552,6 +585,24 @@ struct SettingsView: View {
                     Text("3").tag(3)
                 }
                 .pickerStyle(.segmented).frame(maxWidth: 180)
+            }
+                
+            Divider().background(.white.opacity(0.1))
+                
+            SettingsRow(label: "Stockfish eval score") {
+                Toggle("", isOn: $settings.useStockfishEval).labelsHidden()
+            }
+                
+            Divider().background(.white.opacity(0.1))
+                
+            SettingsRow(label: "Stockfish best move") {
+                Toggle("", isOn: $settings.useStockfishBestMove).labelsHidden()
+            }
+                
+            if settings.useStockfishEval || settings.useStockfishBestMove {
+                Text("Requires --stockfish flag on the server.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.35))
             }
         }
     }
@@ -588,10 +639,7 @@ struct SettingsView: View {
                 Spacer()
                 Button("Apply & Test") {
                     LLMHookService.shared.configure(
-                        provider: LocalLLMProvider(
-                            endpoint: settings.llmEndpoint,
-                            model:    settings.llmModel
-                        )
+                        provider: LocalLLMProvider(settings: settings)
                     )
                 }
                 .buttonStyle(.plain)
@@ -695,10 +743,25 @@ struct SettingsView: View {
             }
             Section("Analysis") {
                 Toggle("Show best-move arrow", isOn: $settings.showBestMoveArrow)
+                            
                 LabeledContent("Hint arrows") {
                     Picker("", selection: $settings.hintCount) {
-                        Text("1").tag(1); Text("2").tag(2); Text("3").tag(3)
-                    }.pickerStyle(.segmented).frame(maxWidth: 140)
+                        Text("1").tag(1)
+                        Text("2").tag(2)
+                        Text("3").tag(3)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 140)
+                }
+                            
+                Toggle("Stockfish eval score", isOn: $settings.useStockfishEval)
+                            
+                Toggle("Stockfish best move", isOn: $settings.useStockfishBestMove)
+                            
+                if settings.useStockfishEval || settings.useStockfishBestMove {
+                    Text("Requires --stockfish flag on the server.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
             Section("AI Commentary") {
@@ -714,11 +777,9 @@ struct SettingsView: View {
                         .multilineTextAlignment(.trailing).autocorrectionDisabled()
                 }
                 Button("Apply & Test") {
+                    // 5. FIX: Same lowercase fix for the iOS settings menu
                     LLMHookService.shared.configure(
-                        provider: LocalLLMProvider(
-                            endpoint: settings.llmEndpoint,
-                            model:    settings.llmModel
-                        )
+                        provider: LocalLLMProvider(settings: settings)
                     )
                 }
             }

@@ -111,6 +111,17 @@ struct DaceloboardView: View {
                             } else {
                                 isDropping = true
                                 store.gameAction(.userDropped(position: to))
+                                
+                                let fenBefore = store.game.board.FEN
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    if store.game.board.FEN == fenBefore {
+                                        // Move was rejected — restore state
+                                        draggingFromVisualIdx = nil
+                                        dragOffset = .zero
+                                        isDropping = false
+                                    }
+                                }
+                            
                             }
                         } else {
                             // Dropped off board — clear immediately since FEN won't change

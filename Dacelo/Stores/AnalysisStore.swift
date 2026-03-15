@@ -22,6 +22,8 @@ final class AnalysisStore: ObservableObject {
     @Published var mobilityBlack:          Int?                        = nil
     @Published var depth:                  Int?                        = nil
     @Published var nodes:                  Int?                        = nil
+    @Published var sfScoreCP:              Int?                        = nil
+    @Published var nnue:                   [String: NNUETerm]?         = nil
     @Published var currentCharacteristics: PositionCharacteristics?    = nil
     @Published var currentPV:             [String]                     = []
     @Published var selectedCritiqueIndex:  Int?                        = nil
@@ -116,6 +118,8 @@ final class AnalysisStore: ObservableObject {
         mobilityBlack          = nil
         depth                  = nil
         nodes                  = nil
+        sfScoreCP              = nil
+        nnue                   = nil
         currentCharacteristics = nil
         currentPV              = []
     }
@@ -209,7 +213,13 @@ final class AnalysisStore: ObservableObject {
         defer { isAnalysing = false }
 
         do {
-            let result = try await engine.analyse(fen: fen, movetime: 2000)
+            let result = try await engine.analyse(
+                fen:                  fen,
+                movetime:             2000,
+                useStockfishEval:     appSettings?.useStockfishEval     ?? false,
+                useStockfishBestMove: appSettings?.useStockfishBestMove ?? false,
+                deep:                 isAnalysisMode
+            )
 
             let fenParts      = fen.split(separator: " ").map(String.init)
             let activeColor   = fenParts.count > 1 ? fenParts[1] : "w"
@@ -269,6 +279,8 @@ final class AnalysisStore: ObservableObject {
             self.mobilityBlack          = result.mobility_black
             self.depth                  = result.depth
             self.nodes                  = result.nodes
+            self.sfScoreCP              = result.sf_score_cp
+            self.nnue                   = result.nnue
             self.lastFeedback           = result.feedback ?? ""
             self.currentCharacteristics = result.characteristics
             self.currentPV              = result.pv ?? []
