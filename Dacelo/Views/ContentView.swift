@@ -29,7 +29,7 @@ struct ContentView: View {
     private var analysisStops: [Gradient.Stop] {
         [
             .init(color: .black,                 location: 0.00),
-            .init(color: .indigo.opacity(0.40),  location: 0.60),
+            .init(color: .indigo.opacity(0.35),  location: 0.35),
             .init(color: .purple.opacity(0.45),  location: 0.85),
             .init(color: .black.opacity(0.95),   location: 1.00)
         ]
@@ -67,14 +67,15 @@ struct ContentView: View {
                         .environmentObject(app)
                     
                     Button {
-                        let next: GameMode = game.gameMode == .analysisOnly ? .humanVsEngine : .analysisOnly
-                        // 3. Wrap the state change in withAnimation to smooth the icon transition
                         withAnimation(.easeInOut(duration: 0.8)) {
-                            game.gameMode = next
+                            if game.gameMode == .analysisOnly {
+                                app.newGame(mode: .humanVsEngine)
+                            } else {
+                                app.enterAnalysisMode()
+                            }
                         }
-                        app.newGame()
                     } label: {
-                        Image(systemName: game.gameMode == .analysisOnly ? "chart.xyaxis.line" : "chart.xyaxis.line")
+                        Image(systemName: "chart.xyaxis.line")
                             .foregroundStyle(game.gameMode == .analysisOnly ? .purple : .secondary)
                     }
                     
@@ -226,7 +227,7 @@ struct ContentView: View {
                             isFlipped:  isFlipped)
                 .environmentObject(game.chessStore)
                 .environmentObject(game)
-            BoardArrowOverlay(arrows: analysis.bestMoveArrow.map { [$0] } ?? [])
+            BoardArrowOverlay(arrows: analysis.bestMoveArrows)
         }
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .background(
@@ -290,7 +291,7 @@ struct BoardControlBar: View {
                 .buttonStyle(.plain)
             }
 
-            Button { analysis.requestHint() } label: {
+            Button { analysis.requestHint(count: settings.hintCount) } label: {
                 HStack(spacing: 5) {
                     if analysis.isRequestingHint {
                         ProgressView().controlSize(.mini).tint(.blue)
@@ -317,23 +318,40 @@ struct BoardControlBar: View {
 struct ConnectionToolbarItem: View {
     @EnvironmentObject var connectionState: EngineConnectionState
     @EnvironmentObject var app: AppStore
+    @State private var isConnecting = false
 
     var body: some View {
-        Button { if !connectionState.isConnected { app.connectToServer() } } label: {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(connectionState.isConnected ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-                Text(connectionState.isConnected
-                     ? app.settings.serverHost
-                     : "Connect")
-                    .font(.caption.weight(connectionState.isConnected ? .regular : .semibold))
+        Button {
+            guard !isConnecting else { return }
+            isConnecting = true
+            Task {
+                app.connectToServer()
+                // Give the connection time to settle before clearing the spinner
+                try? await Task.sleep(for: .seconds(1.5))
+                await MainActor.run { isConnecting = false }
             }
-            .foregroundStyle(connectionState.isConnected ? Color.secondary : Color.red)
+        } label: {
+            HStack(spacing: 5) {
+                if isConnecting {
+                    ProgressView().controlSize(.mini).tint(.blue)
+                } else {
+                    Circle()
+                        .fill(connectionState.isConnected ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                }
+                Text(isConnecting ? "Connecting…"
+                     : connectionState.isConnected ? app.settings.serverHost : "Connect")
+                    .font(.caption.weight(connectionState.isConnected && !isConnecting ? .regular : .semibold))
+            }
+            .foregroundStyle(
+                isConnecting ? .blue
+                    : connectionState.isConnected ? Color.secondary : Color.red
+            )
             .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
-        .disabled(connectionState.isConnected)
+        .animation(.easeInOut(duration: 0.2), value: isConnecting)
+        .animation(.easeInOut(duration: 0.2), value: connectionState.isConnected)
     }
 }
 
@@ -348,15 +366,15 @@ struct NewGameButton: View {
             app.newGame()
             onNewGame?()
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: "arrow.counterclockwise")
-                Text("New Game").font(.footnote.weight(.semibold))
+                Text("New Game").font(.subheadline.weight(.semibold))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(LinearGradient(colors: [.blue, .purple],
                                          startPoint: .leading, endPoint: .trailing))
             )
@@ -571,7 +589,12 @@ struct SettingsView: View {
                 }
             }
             Divider().background(.white.opacity(0.1))
-            NewGameButton(onNewGame: { dismiss() }).environmentObject(app)
+            HStack {
+                Spacer()
+                NewGameButton(onNewGame: { dismiss() })
+                    .environmentObject(app)
+                    .frame(maxWidth: 180)
+            }
         }
     }
 
@@ -596,11 +619,8 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 2)
-                    // Add padding INSIDE the scroll view to prevent the shadow/edge from clipping
-                    .padding(.horizontal, 4)
                 }
-                // Increase this padding to push it further away from the "Pieces" text
-                .padding(.leading, 16)
+                .padding(.leading, 8)
             }
         }
     }

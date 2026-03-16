@@ -36,7 +36,8 @@ final class AnalysisStore: ObservableObject {
 
     @Published var moveCritiques:          [MoveCritique]              = []
     @Published var lastFeedback:           String                      = ""
-    @Published var bestMoveArrow:          (from: String, to: String)? = nil
+    /// Arrows shown on the board: index 0 = best (yellow), 1 = 2nd (cyan), 2 = 3rd (orange).
+    @Published var bestMoveArrows:         [(from: String, to: String)]   = []
     @Published var isRequestingHint:       Bool                        = false
     @Published var isAnalysing:            Bool                        = false
     @Published var scoreCP:                Int?                        = nil
@@ -106,11 +107,11 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Public API
 
-    func observe(_ gameStore: GameStore, settings: AppSettings? = nil) {
+    func observe(_ gameStore: GameStore, settings: AppSettings? = nil, preserveHistory: Bool = false) {
         self.gameStore   = gameStore
         self.appSettings = settings
         cancellables.removeAll()
-        clearHistory()
+        if !preserveHistory { clearHistory() }
 
         gameStore.$chessStore
             .flatMap { $0.$game }
@@ -126,17 +127,25 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Hint
 
+    /// Show hint arrows for the top `count` moves (1–3).
     func requestHint(count: Int = 1) {
         guard let fen = gameStore?.currentFEN, !fen.isEmpty else { return }
         guard !isRequestingHint else { return }
+        let clampedCount = max(1, min(count, 3))
         isRequestingHint = true
         Task {
             do {
                 let result = try await engine.analyse(fen: fen, movetime: 1500)
-                if let from = result.from, let to = result.to,
-                   !from.isEmpty, !to.isEmpty {
-                    bestMoveArrow = (from: from, to: to)
+                var arrows: [(from: String, to: String)] = []
+                if let from = result.from, let to = result.to, !from.isEmpty, !to.isEmpty {
+                    arrows.append((from: from, to: to))
                 }
+                for alt in (result.alternatives ?? []).prefix(clampedCount - 1) {
+                    if let f = alt.from, let t = alt.to, !f.isEmpty, !t.isEmpty {
+                        arrows.append((from: f, to: t))
+                    }
+                }
+                bestMoveArrows = arrows
             } catch {
                 print("[AnalysisStore] Hint failed: \(error.localizedDescription)")
             }
@@ -177,7 +186,7 @@ final class AnalysisStore: ObservableObject {
 
     func clearLivePanel() {
         lastFeedback           = ""
-        bestMoveArrow          = nil
+        bestMoveArrows         = []
         scoreCP                = nil
         wdl                    = nil
         materialBalance        = nil
@@ -210,7 +219,7 @@ final class AnalysisStore: ObservableObject {
         let fen = game.board.FEN
         guard !fen.hasPrefix("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR") else { return }
 
-        bestMoveArrow = nil
+        bestMoveArrows = []
 
         let fenParts      = fen.split(separator: " ").map(String.init)
         let activeColor   = fenParts.count > 1 ? fenParts[1] : "w"
@@ -376,6 +385,23 @@ final class AnalysisStore: ObservableObject {
             self.lastFeedback           = result.feedback ?? ""
             self.currentCharacteristics = result.characteristics
             self.currentPV              = result.pv ?? []
+
+            // Populate arrows: analysis mode shows top 3 alternatives;
+            // play mode clears arrows after each move.
+            if isAnalysisMode {
+                var arrows: [(from: String, to: String)] = []
+                if let from = result.from, let to = result.to, !from.isEmpty, !to.isEmpty {
+                    arrows.append((from: from, to: to))
+                }
+                for alt in (result.alternatives ?? []).prefix(2) {
+                    if let f = alt.from, let t = alt.to, !f.isEmpty, !t.isEmpty {
+                        arrows.append((from: f, to: t))
+                    }
+                }
+                self.bestMoveArrows = arrows
+            } else {
+                self.bestMoveArrows = []
+            }
             self.gamePhase              = result.game_phase
             // Pawn structure and king safety only populated in analysis mode
             self.isolatedWhite          = result.isolated_white

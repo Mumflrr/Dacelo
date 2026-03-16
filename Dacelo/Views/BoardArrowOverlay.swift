@@ -35,9 +35,9 @@ struct BoardArrowOverlay: View {
 
     private func arrowColor(rank: Int) -> Color {
         switch rank {
-        case 0: return Color.yellow
+        case 0: return Color.green
         case 1: return Color.cyan
-        default: return Color.orange
+        default: return Color.red
         }
     }
 
@@ -71,10 +71,10 @@ struct BoardArrowOverlay: View {
     ) {
         let sq        = boardSize / 8
         // Secondary arrows are slightly thinner so rank 1 reads clearest
-        let lineW     = sq * (rank == 0 ? 0.13 : 0.09)
-        let headLen   = sq * (rank == 0 ? 0.36 : 0.28)
-        let headWidth = sq * (rank == 0 ? 0.26 : 0.20)
-        let opacity   = rank == 0 ? 0.85 : 0.65
+        let lineW     = sq * 0.13
+        let headLen   = sq * 0.36
+        let headWidth = sq * 0.26
+        let opacity   = 0.85
 
         let dx  = to.x - from.x
         let dy  = to.y - from.y

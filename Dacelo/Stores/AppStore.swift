@@ -96,13 +96,22 @@ final class AppStore: ObservableObject {
         analysis.observe(gameStore, settings: settings)
     }
 
-    // MARK: - Review Mode
+    // MARK: - Analysis / Review Mode
+
+    /// Enter analysis mode WITHOUT clearing move history.
+    /// Called from the toolbar toggle so the current game's critiques are
+    /// preserved and the user can browse them immediately.
+    func enterAnalysisMode() {
+        gameStore.gameMode = .analysisOnly
+        analysis.observe(gameStore, settings: settings, preserveHistory: true)
+        analysis.fillMissingNarratives()
+    }
 
     /// Switch to analysis mode and fill any LLM narratives that didn't
     /// generate during play (e.g. LLM was offline).
-    /// analysisOnly IS review mode — no separate mode needed.
     func enterReviewMode() {
         gameStore.gameMode = .analysisOnly
+        analysis.observe(gameStore, settings: settings, preserveHistory: true)
         analysis.fillMissingNarratives()
     }
 }

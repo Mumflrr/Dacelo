@@ -1,4 +1,3 @@
-
 """
 dacelo_server_gui.py — Dacelo Server Manager
 
@@ -36,7 +35,6 @@ from PySide6.QtGui import (
 
 if os.name == 'nt':
     ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
-
 
 SCRIPT_DIR    = Path(__file__).parent
 SERVER_SCRIPT = SCRIPT_DIR / "chess_server.py"
@@ -421,7 +419,8 @@ class Card(QFrame):
 # ── Engine table ──────────────────────────────────────────────────────────────
 class EngineTable(QWidget):
     changed = Signal()
-    C_EN=0; C_NM=1; C_EX=2; C_WT=3; C_BE=4; C_BW=5
+    # 4 columns: Enabled | Name | Executable (+ Browse) | Weights (+ Browse)
+    C_EN=0; C_NM=1; C_EX=2; C_WT=3
 
     def __init__(self):
         super().__init__()
@@ -437,16 +436,14 @@ class EngineTable(QWidget):
         for w in [self._up, self._dn]: tb.addWidget(w)
         lay.addLayout(tb)
 
-        self._tbl = QTableWidget(0, 6)
-        self._tbl.setHorizontalHeaderLabels(["", "Name", "Executable", "Weights (optional)", "", ""])
+        self._tbl = QTableWidget(0, 4)
+        self._tbl.setHorizontalHeaderLabels(["", "Name", "Executable", "Weights  (optional — omit for Stockfish)"])
         hh = self._tbl.horizontalHeader()
-        for col, mode in [(self.C_EN,QHeaderView.Fixed),(self.C_NM,QHeaderView.ResizeToContents),
-                          (self.C_EX,QHeaderView.Stretch),(self.C_WT,QHeaderView.Stretch),
-                          (self.C_BE,QHeaderView.Fixed),(self.C_BW,QHeaderView.Fixed)]:
-            hh.setSectionResizeMode(col, mode)
+        hh.setSectionResizeMode(self.C_EN, QHeaderView.Fixed)
+        hh.setSectionResizeMode(self.C_NM, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(self.C_EX, QHeaderView.Stretch)
+        hh.setSectionResizeMode(self.C_WT, QHeaderView.Stretch)
         self._tbl.setColumnWidth(self.C_EN, 36)
-        self._tbl.setColumnWidth(self.C_BE, 66)
-        self._tbl.setColumnWidth(self.C_BW, 66)
         self._tbl.setAlternatingRowColors(True)
         self._tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._tbl.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -468,11 +465,13 @@ class EngineTable(QWidget):
     def collect(self):
         out = []
         for r in range(self._tbl.rowCount()):
-            con = self._tbl.cellWidget(r, self.C_EN)
-            cb  = getattr(con, "_cb", None)
-            nm  = self._tbl.cellWidget(r, self.C_NM)
-            ex  = self._tbl.cellWidget(r, self.C_EX)
-            wt  = self._tbl.cellWidget(r, self.C_WT)
+            con  = self._tbl.cellWidget(r, self.C_EN)
+            cb   = getattr(con, "_cb", None)
+            nm   = self._tbl.cellWidget(r, self.C_NM)
+            ex_w = self._tbl.cellWidget(r, self.C_EX)  # QWidget containing QLineEdit + QPushButton
+            wt_w = self._tbl.cellWidget(r, self.C_WT)
+            ex   = getattr(ex_w, "_edit", None)
+            wt   = getattr(wt_w, "_edit", None)
             out.append({
                 "enabled": cb.isChecked()      if cb else True,
                 "name":    nm.text().strip()    if nm else "",
@@ -489,10 +488,15 @@ class EngineTable(QWidget):
         w.textChanged.connect(self.changed)
         return w
 
-    def _make_browse(self, target, filt):
-        btn = QPushButton("Browse"); btn.setObjectName("browseBtn")
-        btn.clicked.connect(lambda _, t=target, f=filt: self._browse(t, f))
-        return btn
+    def _make_field_cell(self, val, ph, filt):
+        """QWidget containing a QLineEdit + inline Browse button, used as a table cell."""
+        w = QWidget(); lay = QHBoxLayout(w); lay.setContentsMargins(4,2,4,2); lay.setSpacing(4)
+        edit = QLineEdit(val); edit.setPlaceholderText(ph); edit.textChanged.connect(self.changed)
+        btn = QPushButton("Browse"); btn.setObjectName("browseBtn"); btn.setFixedWidth(60); btn.setFixedHeight(26)
+        btn.clicked.connect(lambda _, e=edit, f=filt: self._browse(e, f))
+        lay.addWidget(edit); lay.addWidget(btn)
+        w._edit = edit  # expose for collect()
+        return w
 
     def _append(self, enabled=True, name="", exe="", weights=""):
         r = self._tbl.rowCount(); self._tbl.insertRow(r)
@@ -500,14 +504,10 @@ class EngineTable(QWidget):
         con = QWidget(); cl = QHBoxLayout(con)
         cl.addWidget(cb); cl.setAlignment(Qt.AlignCenter); cl.setContentsMargins(0,0,0,0)
         con._cb = cb; self._tbl.setCellWidget(r, self.C_EN, con)
-        nm_e = self._make_input(name,    "e.g. stockfish")
-        ex_e = self._make_input(exe,     "path\\to\\engine.exe")
-        wt_e = self._make_input(weights, "path\\to\\weights.pb  (omit for Stockfish)")
+        nm_e = self._make_input(name, "e.g. stockfish")
         self._tbl.setCellWidget(r, self.C_NM, nm_e)
-        self._tbl.setCellWidget(r, self.C_EX, ex_e)
-        self._tbl.setCellWidget(r, self.C_WT, wt_e)
-        self._tbl.setCellWidget(r, self.C_BE, self._make_browse(ex_e, "Executable (*.exe)"))
-        self._tbl.setCellWidget(r, self.C_BW, self._make_browse(wt_e, "Weights (*.pb *.pb.gz *.onnx *.bin);;All (*)"))
+        self._tbl.setCellWidget(r, self.C_EX, self._make_field_cell(exe,     r"path\to\engine.exe",          "Executable (*.exe)"))
+        self._tbl.setCellWidget(r, self.C_WT, self._make_field_cell(weights, r"path\to\weights.pb  (blank for Stockfish)", "Weights (*.pb *.pb.gz *.onnx *.bin);;All (*)"))
         self._tbl.setRowHeight(r, 40)
         self.changed.emit()
 
@@ -525,11 +525,14 @@ class EngineTable(QWidget):
 
     def _swap(self, a, b):
         def get(r):
-            con = self._tbl.cellWidget(r, self.C_EN)
+            con  = self._tbl.cellWidget(r, self.C_EN)
+            ex_w = self._tbl.cellWidget(r, self.C_EX)
+            wt_w = self._tbl.cellWidget(r, self.C_WT)
+            nm   = self._tbl.cellWidget(r, self.C_NM)
             return {"enabled": getattr(con,"_cb",None).isChecked() if con else True,
-                    "name": (self._tbl.cellWidget(r,self.C_NM) or QLineEdit()).text(),
-                    "exe":  (self._tbl.cellWidget(r,self.C_EX) or QLineEdit()).text(),
-                    "weights": (self._tbl.cellWidget(r,self.C_WT) or QLineEdit()).text()}
+                    "name": nm.text() if nm else "",
+                    "exe":  getattr(ex_w,"_edit",QLineEdit()).text() if ex_w else "",
+                    "weights": getattr(wt_w,"_edit",QLineEdit()).text() if wt_w else ""}
         da, db = get(a), get(b)
         lo, hi = min(a,b), max(a,b)
         dl, dh = (db,da) if a<b else (da,db)
@@ -543,14 +546,10 @@ class EngineTable(QWidget):
         con = QWidget(); cl = QHBoxLayout(con)
         cl.addWidget(cb); cl.setAlignment(Qt.AlignCenter); cl.setContentsMargins(0,0,0,0)
         con._cb = cb; self._tbl.setCellWidget(r, self.C_EN, con)
-        nm_e = self._make_input(name,"e.g. stockfish")
-        ex_e = self._make_input(exe,"path\\to\\engine.exe")
-        wt_e = self._make_input(weights,"path\\to\\weights.pb")
+        nm_e = self._make_input(name, "e.g. stockfish")
         self._tbl.setCellWidget(r, self.C_NM, nm_e)
-        self._tbl.setCellWidget(r, self.C_EX, ex_e)
-        self._tbl.setCellWidget(r, self.C_WT, wt_e)
-        self._tbl.setCellWidget(r, self.C_BE, self._make_browse(ex_e,"Executable (*.exe)"))
-        self._tbl.setCellWidget(r, self.C_BW, self._make_browse(wt_e,"Weights (*.pb *.pb.gz *.onnx);;All (*)"))
+        self._tbl.setCellWidget(r, self.C_EX, self._make_field_cell(exe,     r"path\to\engine.exe",   "Executable (*.exe)"))
+        self._tbl.setCellWidget(r, self.C_WT, self._make_field_cell(weights, r"path\to\weights.pb", "Weights (*.pb *.pb.gz *.onnx);;All (*)"))
         self._tbl.setRowHeight(r, 40)
 
     def _browse(self, target, filt):
@@ -646,7 +645,7 @@ class MainWindow(QMainWindow):
     # ── Engines tab ──────────────────────────────────────────────────────────
     def _tab_engines(self):
         w = QWidget(); w.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(w); lay.setContentsMargins(0,16,0,0); lay.setSpacing(12)
+        lay = QVBoxLayout(w); lay.setContentsMargins(16,16,16,16); lay.setSpacing(12)
 
         hdr = QLabel("UCI ENGINES"); hdr.setObjectName("sectionHdr")
         hint = QLabel(
@@ -675,7 +674,7 @@ class MainWindow(QMainWindow):
     # ── Server tab ───────────────────────────────────────────────────────────
     def _tab_server(self):
         w = QWidget(); w.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(w); lay.setContentsMargins(0,16,0,0); lay.setSpacing(12)
+        lay = QVBoxLayout(w); lay.setContentsMargins(16,16,16,16); lay.setSpacing(12)
 
         hdr = QLabel("SERVER SETTINGS"); hdr.setObjectName("sectionHdr"); lay.addWidget(hdr)
 
@@ -706,7 +705,7 @@ class MainWindow(QMainWindow):
     # ── Log tab ──────────────────────────────────────────────────────────────
     def _tab_log(self):
         w = QWidget(); w.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(w); lay.setContentsMargins(0,16,0,0); lay.setSpacing(10)
+        lay = QVBoxLayout(w); lay.setContentsMargins(16,16,16,16); lay.setSpacing(10)
 
         tb = QHBoxLayout()
         path_lbl = QLabel(str(LOG_FILE)); path_lbl.setStyleSheet("color:rgba(255,255,255,0.2); font-size:11px; background:transparent;")
@@ -727,7 +726,7 @@ class MainWindow(QMainWindow):
     # ── LLM tab (placeholder) ────────────────────────────────────────────────
     def _tab_llm(self):
         w = QWidget(); w.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(w); lay.setContentsMargins(0,40,0,0); lay.setSpacing(12); lay.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        lay = QVBoxLayout(w); lay.setContentsMargins(16,40,16,16); lay.setSpacing(12); lay.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
 
         card = Card(); card.setFixedWidth(420)
         cl = QVBoxLayout(card); cl.setContentsMargins(32,32,32,32); cl.setSpacing(14); cl.setAlignment(Qt.AlignCenter)
