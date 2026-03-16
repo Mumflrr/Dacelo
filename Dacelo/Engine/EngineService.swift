@@ -1,6 +1,30 @@
 // EngineService.swift
 // Dacelo
 // Engine/
+//
+// WebSocket client for the chess_server.py bridge.
+// Implemented as a Swift actor — all state mutations are serialised.
+//
+// Connection lifecycle:
+//   configure(host:port:) → connect() → [ping loop] → disconnect()
+//
+// Request/response model:
+//   Each public method sends a JSON command and awaits a matching response
+//   type via a CheckedContinuation queue. A timeout race task cancels the
+//   continuation if the server doesn't respond in time.
+//
+// Engine routing (all resolved server-side):
+//   analyse(evalEngine:bestMoveEngine:nnueEngine:deep:)
+//     evalEngine      — scores, WDL, alternatives, characteristics
+//     bestMoveEngine  — generates the actual move (may differ from evalEngine)
+//     nnueEngine      — concurrent Stockfish run in analysis mode for NNUE terms
+//   engineMove(bestMoveEngine:)
+//     Used by UCIRobot — returns from/to/promotion for the Chess library
+//
+// Engine discovery:
+//   queryEngines() sends {"cmd":"engines"} and returns the server's registered
+//   engine name list. Called automatically on connect; result stored in
+//   AppSettings.availableEngines for live picker UI.
 
 import Foundation
 
@@ -17,8 +41,6 @@ final class EngineConnectionState: ObservableObject {
 actor EngineService: NSObject {
 
     // MARK: - Public
-    // Created on MainActor by AppStore and passed in — avoids calling
-    // a @MainActor initialiser from inside the actor's own init.
     let state: EngineConnectionState
 
     // MARK: - Private
@@ -81,22 +103,40 @@ actor EngineService: NSObject {
 
     // MARK: - Public API
 
+    /// Analyse a position.
+    ///
+    /// - Parameters:
+    ///   - evalEngine:     Engine name to use for evaluation (default "primary").
+    ///   - bestMoveEngine: Engine name to use for best-move generation (default "primary").
+    ///                     When different from evalEngine, the server runs both and returns
+    ///                     the move engine's score as `deep_score_cp`.
+    ///   - nnueEngine:     Engine to run concurrently for NNUE breakdown (analysis mode only).
+    ///                     Only used when `deep=true`. Typically "stockfish". Pass nil or ""
+    ///                     to skip NNUE analysis. The server runs this engine in parallel with
+    ///                     the eval engine and merges its `nnue` field into the response.
     func analyse(
-        fen: String,
-        movetime: Int = 2000,
-        useStockfishEval: Bool = false,
-        useStockfishBestMove: Bool = false,
-        deep: Bool = false
+        fen:             String,
+        movetime:        Int    = 2000,
+        evalEngine:      String = "primary",
+        bestMoveEngine:  String = "primary",
+        nnueEngine:      String = "",
+        deep:            Bool   = false
     ) async throws -> AnalysisResponse {
+        var payload: [String: Any] = [
+            "cmd":               "analyse",
+            "fen":               fen,
+            "movetime":          movetime,
+            "eval_engine":       evalEngine,
+            "best_move_engine":  bestMoveEngine,
+            "deep":              deep,
+        ]
+        // Only send nnue_engine when in deep/analysis mode and a name is specified.
+        // The server skips NNUE analysis when this key is absent or empty.
+        if deep && !nnueEngine.isEmpty {
+            payload["nnue_engine"] = nnueEngine
+        }
         let data = try await request(
-            [
-                "cmd":                    "analyse",
-                "fen":                    fen,
-                "movetime":               movetime,
-                "use_stockfish_eval":     useStockfishEval,
-                "use_stockfish_bestmove": useStockfishBestMove,
-                "deep":                   deep,
-            ],
+            payload,
             expectedTypes: ["analysis"],
             timeout: Double(movetime) / 1000.0 + (deep ? 20.0 : 15.0)
         )
@@ -105,9 +145,22 @@ actor EngineService: NSObject {
         return result
     }
 
-    func engineMove(fen: String, movetime: Int = 3000) async throws -> EngineMoveResponse {
+    /// Request the engine's best move for a position.
+    ///
+    // FIX: was missing bestMoveEngine parameter — UCIRobot called it with
+    // engine.engineMove(fen:movetime:bestMoveEngine:) → compile error.
+    func engineMove(
+        fen:            String,
+        movetime:       Int    = 3000,
+        bestMoveEngine: String = "primary"
+    ) async throws -> EngineMoveResponse {
         let data = try await request(
-            ["cmd": "engine_move", "fen": fen, "movetime": movetime],
+            [
+                "cmd":      "engine_move",
+                "fen":      fen,
+                "movetime": movetime,
+                "engine":   bestMoveEngine,
+            ],
             expectedTypes: ["engine_move"],
             timeout: Double(movetime) / 1000.0 + 15.0
         )
@@ -118,6 +171,24 @@ actor EngineService: NSObject {
 
     func newGame() async {
         try? await sendJSON(["cmd": "new_game"])
+    }
+
+    /// Query the server for the list of registered engine names.
+    /// Call once after connecting; the result populates AppSettings.availableEngines
+    /// so the UI can show live pickers instead of free-text fields.
+    func queryEngines() async -> [String] {
+        guard webSocketTask != nil else { return [] }
+        do {
+            let data = try await request(
+                ["cmd": "engines"],
+                expectedTypes: ["engines"],
+                timeout: 5.0
+            )
+            let decoded = try? JSONDecoder().decode(EnginesResponse.self, from: data)
+            return decoded?.engines ?? []
+        } catch {
+            return []
+        }
     }
 
     // MARK: - Private: request / response
@@ -183,7 +254,7 @@ actor EngineService: NSObject {
     private func route(_ data: Data) {
         guard let partial = try? JSONDecoder().decode(TypeOnlyResponse.self, from: data) else { return }
         let type = partial.type
-        guard type != "pong", type != "info" else { return }
+        guard type != "pong", type != "info", type != "ok" else { return }
 
         if let idx = pending.firstIndex(where: {
             $0.expectedTypes.contains(type) || type == "error"
@@ -226,9 +297,6 @@ actor EngineService: NSObject {
     }
 
     // MARK: - State helpers
-    // nonisolated(unsafe) lets us write to the MainActor object from the
-    // actor without a Task hop — safe here because writes are always
-    // dispatched to MainActor via DispatchQueue.main.async.
 
     private func setConnected(_ value: Bool) {
         let s = state

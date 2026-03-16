@@ -1,5 +1,21 @@
 // GameStore.swift
 // Dacelo
+//
+// Manages the live chess game. Wraps the swift-chess ChessStore and
+// bridges it to the app's engine and settings.
+//
+// Game modes:
+//   humanVsEngine  — player vs UCI engine (UCIRobot on engine's side)
+//   humanVsHuman   — two human players, engine analyses only
+//   analysisOnly   — two human players + full deep analysis + LLM commentary.
+//                    Board accepts free moves from both sides. The move history
+//                    drawer is the primary review navigator: selecting a critique
+//                    shows that position; deselecting returns to the live position.
+//
+// Robot pause flow (humanVsEngine):
+//   togglePause() sets robotController.isPaused.
+//   UCIRobot.evaluate() polls this and blocks in waitForManualMoveOrResume().
+//   User can drag/tap squares on the engine's behalf while paused.
 
 import Chess
 import SwiftUI
@@ -18,10 +34,16 @@ enum PlayerColor: String, CaseIterable, Identifiable {
 // MARK: - Game Mode
 
 enum GameMode: String, CaseIterable, Identifiable {
-    case humanVsEngine = "vs Leela"
+    case humanVsEngine = "vs Engine"
     case humanVsHuman  = "Two Players"
-    case analysisOnly  = "Analysis Mode"
+    case analysisOnly  = "Analysis"
+
     var id: String { rawValue }
+
+    /// True when deep analytics, NNUE breakdown, and LLM commentary are active.
+    /// In analysis mode the board accepts free moves from both sides and the
+    /// move history drawer doubles as a review navigator.
+    var isAnalysis: Bool { self == .analysisOnly }
 }
 
 // MARK: - Board Theme
@@ -115,8 +137,8 @@ final class GameStore: ObservableObject {
     // MARK: - New Game
 
     func newGame() {
-        // Cancel any running robot so its background thread exits.
-        robotController.isCancelled = true
+        if let robot = chessStore.game.black as? UCIRobot { robot.robotController?.isCancelled = true }
+        if let robot = chessStore.game.white as? UCIRobot { robot.robotController?.isCancelled = true }
         robotController = RobotController()
 
         isPaused       = false
@@ -215,16 +237,19 @@ final class GameStore: ObservableObject {
                 ? (Chess.HumanPlayer(side: .white), robot)
                 : (robot, Chess.HumanPlayer(side: .black))
         case .humanVsHuman, .analysisOnly:
+            // Both modes use two human players. In analysisOnly the engine
+            // analyses every move but does not generate moves itself.
             return (Chess.HumanPlayer(side: .white),
                     Chess.HumanPlayer(side: .black))
         }
     }
 
-    private func makeRobot() -> Lc0Robot {
-        Lc0Robot(
+    private func makeRobot() -> UCIRobot {
+        UCIRobot(
             side:            playerColor.opposite.chessSide,
             engine:          engine,
             moveTimeMs:      settings.moveTimeMs,
+            bestMoveEngine:  settings.bestMoveEngine,
             robotController: robotController
         )
     }

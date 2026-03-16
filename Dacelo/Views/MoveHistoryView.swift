@@ -1,5 +1,20 @@
 // MoveHistoryView.swift
 // Dacelo
+//
+// Move history UI components used in the MoveHistoryDrawer.
+//
+//   MoveHistorySection    — collapsible list of MoveCards
+//   MoveHistoryView       — full-screen standalone wrapper (NavigationStack)
+//   MoveCard              — one card per move: piece icon, notation, quality badge,
+//                           eval delta, engine line, characteristics badges,
+//                           alternatives, and (when selected) LLM narrative
+//   QualityBadge          — colour-coded move quality capsule
+//   EvalChangeIndicator   — before/after centipawn delta arrow
+//   CharacteristicsBadges — position_type, precision_required, eval_stability,
+//                           line_type badges with explanation text
+//   AlternativesSection   — collapsible MultiPV alternative lines
+//   AlternativeLineRow    — ranked alternative with PV
+//   EngineLineView        — scrollable UCI move sequence
 
 import SwiftUI
 
@@ -163,6 +178,13 @@ struct MoveCard: View {
                     isExpanded: $showAlternatives
                 )
             }
+
+            // ── AI Commentary (analysis mode, per-move) ───────────────────
+            // Only shown when selected — avoids wall-of-text in the drawer.
+            if isSelected {
+                LLMNarrativeView(critiqueID: critique.id)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding(14)
         .background(
@@ -320,12 +342,21 @@ struct CharacteristicsBadges: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Badge(text: characteristics.sharpness,  icon: "flame.fill",   color: sharpnessColor)
-                Badge(text: characteristics.difficulty, icon: difficultyIcon, color: difficultyColor)
+                // Use new field names; fall back via legacy aliases if needed
+                Badge(text: characteristics.position_type,
+                      icon: positionTypeIcon(characteristics.position_type),
+                      color: positionTypeColor(characteristics.position_type))
+                Badge(text: characteristics.precision_required,
+                      icon: precisionIcon(characteristics.precision_required),
+                      color: precisionColor(characteristics.precision_required))
             }
             HStack(spacing: 6) {
-                Badge(text: characteristics.margin_for_error, icon: "target",   color: marginColor)
-                Badge(text: characteristics.line_type,        icon: lineIcon,   color: .purple)
+                Badge(text: characteristics.eval_stability,
+                      icon: stabilityIcon(characteristics.eval_stability),
+                      color: stabilityColor(characteristics.eval_stability))
+                Badge(text: characteristics.line_type,
+                      icon: lineTypeIcon(characteristics.line_type),
+                      color: .purple)
             }
             Text(characteristics.explanation)
                 .font(.caption)
@@ -335,50 +366,6 @@ struct CharacteristicsBadges: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.2)))
-    }
-
-    private var sharpnessColor: Color {
-        switch characteristics.sharpness {
-        case "Sharp":    return .red
-        case "Tactical": return .orange
-        case "Balanced": return .blue
-        default:         return .green
-        }
-    }
-
-    private var difficultyColor: Color {
-        switch characteristics.difficulty {
-        case "Expert":       return .red
-        case "Advanced":     return .orange
-        case "Intermediate": return .yellow
-        default:             return .green
-        }
-    }
-
-    private var marginColor: Color {
-        switch characteristics.margin_for_error {
-        case "Narrow":   return .red
-        case "Moderate": return .orange
-        default:         return .green
-        }
-    }
-
-    private var difficultyIcon: String {
-        switch characteristics.difficulty {
-        case "Expert":       return "star.circle.fill"
-        case "Advanced":     return "3.circle.fill"
-        case "Intermediate": return "2.circle.fill"
-        default:             return "1.circle.fill"
-        }
-    }
-
-    private var lineIcon: String {
-        switch characteristics.line_type {
-        case "Forcing":   return "bolt.fill"
-        case "Committal": return "arrow.right.circle.fill"
-        case "Flexible":  return "arrow.triangle.branch"
-        default:          return "tortoise.fill"
-        }
     }
 }
 
@@ -505,9 +492,11 @@ struct AlternativeLineRow: View {
                                        pv: ["d2d4", "g8f6", "c2c4", "e7e6", "g1f3"]),
                     ],
                     characteristics: PositionCharacteristics(
-                        sharpness: "Balanced", difficulty: "Beginner",
-                        margin_for_error: "Forgiving", line_type: "Flexible", confidence: "Confident",
-                        explanation: "Engine rates this +0.35 pawns in White's favour."
+                        position_type:      "Unbalanced",
+                        precision_required: "Low",
+                        eval_stability:     "Stable",
+                        line_type:          "Flexible",
+                        explanation:        "There is a best move, but alternatives are reasonable. The best line is long and keeps many options open. Several moves maintain the position well."
                     ),
                     suggestedLine: ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
                 ),

@@ -55,7 +55,7 @@ struct ContentView: View {
                 iOSLayout
                 #endif
             }
-            .navigationTitle(game.gameMode == .analysisOnly ? "Analysis" : "Leela Chess")
+            .navigationTitle(game.gameMode == .analysisOnly ? "Analysis" : "Dacelo")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -129,11 +129,19 @@ struct ContentView: View {
             .padding(16)
 
             VStack(spacing: 0) {
-                AnalysisPanel()
-                    .environmentObject(analysis)
-                    .environmentObject(game)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
+                Group {
+                    if game.gameMode == .analysisOnly {
+                        ReviewAnalysisPanel()
+                            .environmentObject(analysis)
+                            .environmentObject(game)
+                    } else {
+                        AnalysisPanel()
+                            .environmentObject(analysis)
+                            .environmentObject(game)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
                 MoveNavigationBar()
                     .environmentObject(analysis)
                     .padding(.horizontal, 12)
@@ -178,10 +186,18 @@ struct ContentView: View {
                         .environmentObject(settings)
                         .padding(.horizontal, 16)
 
-                    AnalysisPanel()
-                        .environmentObject(analysis)
-                        .environmentObject(game)
-                        .padding(.horizontal, 16)
+                    Group {
+                        if game.gameMode == .analysisOnly {
+                            ReviewAnalysisPanel()
+                                .environmentObject(analysis)
+                                .environmentObject(game)
+                        } else {
+                            AnalysisPanel()
+                                .environmentObject(analysis)
+                                .environmentObject(game)
+                        }
+                    }
+                    .padding(.horizontal, 16)
 
                     MoveNavigationBar()
                         .environmentObject(analysis)
@@ -205,7 +221,7 @@ struct ContentView: View {
 
     private var boardWithArrows: some View {
         ZStack {
-            DaceloboardView(boardTheme: game.boardTheme,
+            BoardLayout(boardTheme: game.boardTheme,
                             pieceSet:   settings.pieceSet,
                             isFlipped:  isFlipped)
                 .environmentObject(game.chessStore)
@@ -235,14 +251,19 @@ struct BoardControlBar: View {
     @EnvironmentObject var analysis: AnalysisStore
     @EnvironmentObject var settings: AppSettings
 
+    private var engineDisplayName: String {
+        settings.bestMoveEngine.isEmpty ? "Engine" : settings.bestMoveEngine.capitalized
+    }
+
+    private var pauseButtonLabel: String {
+        game.isPaused ? "Resume \(engineDisplayName)" : "Take \(engineDisplayName)'s Turn"
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             if game.gameMode == .humanVsEngine {
                 Button { game.togglePause() } label: {
-                    Label(
-                        game.isPaused ? "Resume Leela" : "Take Leela's Turn",
-                        systemImage: game.isPaused ? "play.fill" : "pause.fill"
-                    )
+                    Label(pauseButtonLabel, systemImage: game.isPaused ? "play.fill" : "pause.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(game.isPaused ? .green : .orange)
                     .padding(.horizontal, 12).padding(.vertical, 8)
@@ -327,15 +348,15 @@ struct NewGameButton: View {
             app.newGame()
             onNewGame?()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: "arrow.counterclockwise")
-                Text("New Game").font(.subheadline.weight(.semibold))
+                Text("New Game").font(.footnote.weight(.semibold))
             }
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(LinearGradient(colors: [.blue, .purple],
                                          startPoint: .leading, endPoint: .trailing))
             )
@@ -517,6 +538,17 @@ struct SettingsView: View {
                 )
                 .foregroundStyle(.white)
                 .font(.subheadline.weight(.semibold))
+
+                if app.engine.state.isConnected {
+                    Button("Refresh Engines") {
+                        Task { await app.refreshAvailableEngines() }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.08)))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .font(.subheadline)
+                }
             }
         }
     }
@@ -564,8 +596,11 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 2)
+                    // Add padding INSIDE the scroll view to prevent the shadow/edge from clipping
+                    .padding(.horizontal, 4)
                 }
-                .padding(.leading, 8)
+                // Increase this padding to push it further away from the "Pieces" text
+                .padding(.leading, 16)
             }
         }
     }
@@ -575,9 +610,9 @@ struct SettingsView: View {
             SettingsRow(label: "Show best-move arrow") {
                 Toggle("", isOn: $settings.showBestMoveArrow).labelsHidden()
             }
-                
+
             Divider().background(.white.opacity(0.1))
-                
+
             SettingsRow(label: "Hint arrows") {
                 Picker("", selection: $settings.hintCount) {
                     Text("1 (Best)").tag(1)
@@ -586,24 +621,23 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented).frame(maxWidth: 180)
             }
-                
+
             Divider().background(.white.opacity(0.1))
-                
-            SettingsRow(label: "Stockfish eval score") {
-                Toggle("", isOn: $settings.useStockfishEval).labelsHidden()
+
+            SettingsRow(label: "Eval engine") {
+                enginePicker($settings.evalEngine, placeholder: "stockfish")
             }
-                
+
             Divider().background(.white.opacity(0.1))
-                
-            SettingsRow(label: "Stockfish best move") {
-                Toggle("", isOn: $settings.useStockfishBestMove).labelsHidden()
+
+            SettingsRow(label: "NNUE engine (analysis)") {
+                enginePicker($settings.nnueEngine, placeholder: "stockfish")
             }
-                
-            if settings.useStockfishEval || settings.useStockfishBestMove {
-                Text("Requires --stockfish flag on the server.")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.35))
-            }
+
+            Text("NNUE only runs in Analysis Mode. Must be Stockfish or compatible.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.35))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -656,13 +690,19 @@ struct SettingsView: View {
 
     private var engineCard: some View {
         SettingsCard(title: "Engine", icon: "cpu", iconColor: .green) {
-            SettingsRow(label: "Think Time") {
+            SettingsRow(label: "Move engine") {
+                enginePicker($settings.bestMoveEngine, placeholder: "lc0")
+            }
+
+            Divider().background(.white.opacity(0.1))
+
+            SettingsRow(label: "Move think time") {
                 HStack(spacing: 10) {
                     Slider(value: Binding(
                         get: { Double(settings.moveTimeMs) },
                         set: { settings.moveTimeMs = Int($0) }
                     ), in: 500...10000, step: 500)
-                    .frame(maxWidth: 180).accentColor(.blue)
+                    .frame(maxWidth: 180).accentColor(.green)
                     Text(settings.moveTimeMs >= 1000
                          ? "\(settings.moveTimeMs / 1000)s"
                          : "\(settings.moveTimeMs)ms")
@@ -671,6 +711,57 @@ struct SettingsView: View {
                         .frame(width: 44, alignment: .trailing)
                 }
             }
+
+            Divider().background(.white.opacity(0.1))
+
+            SettingsRow(label: "Eval think time") {
+                HStack(spacing: 10) {
+                    Slider(value: Binding(
+                        get: { Double(settings.evalTimeMs) },
+                        set: { settings.evalTimeMs = Int($0) }
+                    ), in: 500...10000, step: 500)
+                    .frame(maxWidth: 180).accentColor(.blue)
+                    Text(settings.evalTimeMs >= 1000
+                         ? "\(settings.evalTimeMs / 1000)s"
+                         : "\(settings.evalTimeMs)ms")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+
+            Text("Move engine plays your opponent. Eval engine analyses every position — use Stockfish for full NNUE breakdowns.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.35))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Engine picker: shows a dropdown when the server has reported available engines,
+    /// falls back to a text field if the list is empty (e.g. not yet connected).
+    @ViewBuilder
+    private func enginePicker(_ binding: Binding<String>, placeholder: String) -> some View {
+        if settings.availableEngines.isEmpty {
+            // Not connected yet — free-text fallback
+            TextField(placeholder, text: binding)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
+                .frame(maxWidth: 160)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+        } else {
+            Picker("", selection: binding) {
+                ForEach(settings.availableEngines, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
         }
     }
 
@@ -706,6 +797,13 @@ struct SettingsView: View {
                 Button(app.engine.state.isConnected ? "Reconnect" : "Connect") {
                     app.connectToServer()
                 }.buttonStyle(.borderedProminent)
+
+                if app.engine.state.isConnected {
+                    Button("Refresh Engine List") {
+                        Task { await app.refreshAvailableEngines() }
+                    }
+                    .foregroundStyle(.secondary)
+                }
             }
             Section("Game") {
                 Picker("Mode", selection: $game.gameMode) {
@@ -743,7 +841,7 @@ struct SettingsView: View {
             }
             Section("Analysis") {
                 Toggle("Show best-move arrow", isOn: $settings.showBestMoveArrow)
-                            
+
                 LabeledContent("Hint arrows") {
                     Picker("", selection: $settings.hintCount) {
                         Text("1").tag(1)
@@ -753,15 +851,13 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 140)
                 }
-                            
-                Toggle("Stockfish eval score", isOn: $settings.useStockfishEval)
-                            
-                Toggle("Stockfish best move", isOn: $settings.useStockfishBestMove)
-                            
-                if settings.useStockfishEval || settings.useStockfishBestMove {
-                    Text("Requires --stockfish flag on the server.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+
+                LabeledContent("Eval engine") {
+                    enginePicker($settings.evalEngine, placeholder: "stockfish")
+                }
+
+                LabeledContent("NNUE engine") {
+                    enginePicker($settings.nnueEngine, placeholder: "stockfish")
                 }
             }
             Section("AI Commentary") {
@@ -784,14 +880,29 @@ struct SettingsView: View {
                 }
             }
             Section("Engine") {
-                LabeledContent("Think Time") {
+                LabeledContent("Move engine") {
+                    enginePicker($settings.bestMoveEngine, placeholder: "lc0")
+                }
+
+                LabeledContent("Move think time") {
                     HStack {
                         Slider(value: Binding(
                             get: { Double(settings.moveTimeMs) },
                             set: { settings.moveTimeMs = Int($0) }
                         ), in: 500...10000, step: 500)
-                        Text("\(settings.moveTimeMs)ms")
-                            .monospacedDigit().frame(width: 70, alignment: .trailing)
+                        Text("\(settings.moveTimeMs / 1000)s")
+                            .monospacedDigit().frame(width: 44, alignment: .trailing)
+                    }
+                }
+
+                LabeledContent("Eval think time") {
+                    HStack {
+                        Slider(value: Binding(
+                            get: { Double(settings.evalTimeMs) },
+                            set: { settings.evalTimeMs = Int($0) }
+                        ), in: 500...10000, step: 500)
+                        Text("\(settings.evalTimeMs / 1000)s")
+                            .monospacedDigit().frame(width: 44, alignment: .trailing)
                     }
                 }
             }

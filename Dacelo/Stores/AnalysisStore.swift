@@ -1,5 +1,29 @@
 // AnalysisStore.swift
 // Dacelo
+//
+// Drives all chess analysis UI. Observes the live ChessStore and fires an
+// analyse request to EngineService after every move.
+//
+// Published state is split by cost:
+//
+//   BOTH MODES (every move)
+//     scoreCP, wdl, feedback         — engine eval + human-readable summary
+//     alternatives, currentPV        — MultiPV lines from the eval engine
+//     materialBalance, mobility*     — python-chess arithmetic (free)
+//     gamePhase                      — Opening / Middlegame / Endgame
+//     currentCharacteristics         — position type, precision, stability, line type
+//     moveCritiques                  — full history, one entry per move
+//
+//   ANALYSIS MODE ONLY  (deep=true, runs concurrently)
+//     nnue                           — Stockfish NNUE term breakdown
+//     pawnStructure, isolated*, doubled*, passed*  — python-chess pawn analysis
+//     kingAttackers*, kingCastled*   — python-chess king safety
+//
+//   LLM NARRATIVES
+//     llmContexts: [UUID: LLMAnalysisContext]  — built every move in analysis mode
+//     LLM calls fire immediately per move (background). Displayed only when the
+//     user selects a MoveCard in analysis mode. fillMissingNarratives() fills
+//     any gaps if the LLM was offline during play.
 
 import Foundation
 import Combine
@@ -22,11 +46,32 @@ final class AnalysisStore: ObservableObject {
     @Published var mobilityBlack:          Int?                        = nil
     @Published var depth:                  Int?                        = nil
     @Published var nodes:                  Int?                        = nil
-    @Published var sfScoreCP:              Int?                        = nil
+    /// Raw score_cp from the eval engine (non-normalised, from side-to-move perspective).
+    // FIX: was never set from any response — now populated from result.score_cp
+    @Published var engineScoreCP:          Int?                        = nil
+    /// Score from the secondary (best-move) engine, when it differs from evalEngine.
+    @Published var deepScoreCP:            Int?                        = nil
     @Published var nnue:                   [String: NNUETerm]?         = nil
     @Published var currentCharacteristics: PositionCharacteristics?    = nil
     @Published var currentPV:             [String]                     = []
     @Published var selectedCritiqueIndex:  Int?                        = nil
+    @Published var gamePhase:             String?                      = nil
+    /// LLM context keyed by MoveCritique.id — used for lazy narrative generation.
+    /// Built during analysis, consumed lazily when the user navigates to a move.
+    private(set) var llmContexts: [UUID: LLMAnalysisContext] = [:]
+    // Pawn structure (analysis mode only)
+    @Published var isolatedWhite:         Int?                         = nil
+    @Published var isolatedBlack:         Int?                         = nil
+    @Published var doubledWhite:          Int?                         = nil
+    @Published var doubledBlack:          Int?                         = nil
+    @Published var passedWhite:           Int?                         = nil
+    @Published var passedBlack:           Int?                         = nil
+    @Published var pawnStructure:         String?                      = nil
+    // King safety (analysis mode only)
+    @Published var kingAttackersWhite:    Int?                         = nil
+    @Published var kingAttackersBlack:    Int?                         = nil
+    @Published var kingCastledWhite:      Bool?                        = nil
+    @Published var kingCastledBlack:      Bool?                        = nil
 
     var canGoBack:    Bool { !moveCritiques.isEmpty && (selectedCritiqueIndex ?? moveCritiques.count - 1) > 0 }
     var canGoForward: Bool { selectedCritiqueIndex != nil && selectedCritiqueIndex! < moveCritiques.count - 1 }
@@ -101,11 +146,33 @@ final class AnalysisStore: ObservableObject {
 
     func clearHistory() {
         moveCritiques.removeAll()
+        llmContexts.removeAll()
         selectedCritiqueIndex = nil
         prevEval  = nil
         moveCount = 0
         clearLivePanel()
-        LLMHookService.shared.clearNarrative()
+        LLMHookService.shared.clearNarratives()
+    }
+
+    // MARK: - Lazy LLM narrative request
+
+    /// Call when the user navigates to a specific critique in post-game review.
+    /// Fires the LLM request if not already generated or in-flight.
+    func requestNarrativeIfNeeded(for critique: MoveCritique) {
+        guard let ctx = llmContexts[critique.id] else { return }
+        LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
+    }
+
+    /// Fill any missing narratives — call on entering review mode to catch
+    /// moves where the LLM was offline or failed during play.
+    func fillMissingNarratives() {
+        let pairs = moveCritiques.compactMap { critique -> (UUID, LLMAnalysisContext)? in
+            guard let ctx = llmContexts[critique.id] else { return nil }
+            return (critique.id, ctx)
+        }
+        LLMHookService.shared.fillMissingNarratives(
+            critiques: pairs.map { (id: $0.0, context: $0.1) }
+        )
     }
 
     func clearLivePanel() {
@@ -118,10 +185,23 @@ final class AnalysisStore: ObservableObject {
         mobilityBlack          = nil
         depth                  = nil
         nodes                  = nil
-        sfScoreCP              = nil
+        engineScoreCP          = nil
+        deepScoreCP            = nil
         nnue                   = nil
         currentCharacteristics = nil
         currentPV              = []
+        gamePhase              = nil
+        isolatedWhite          = nil
+        isolatedBlack          = nil
+        doubledWhite           = nil
+        doubledBlack           = nil
+        passedWhite            = nil
+        passedBlack            = nil
+        pawnStructure          = nil
+        kingAttackersWhite     = nil
+        kingAttackersBlack     = nil
+        kingCastledWhite       = nil
+        kingCastledBlack       = nil
     }
 
     // MARK: - Position change handler
@@ -183,6 +263,12 @@ final class AnalysisStore: ObservableObject {
         let capturedPieceType  = pieceType
         let isAnalysisMode     = gameStore?.gameMode == .analysisOnly
 
+        // Capture the NNUE engine name now (on MainActor) before entering the Task.
+        // In analysis mode the server runs this engine concurrently with the primary
+        // eval engine and merges the NNUE breakdown into the response.
+        // In regular play mode this is "" — EngineService won't send nnue_engine at all.
+        let capturedNNUEEngine = isAnalysisMode ? (appSettings?.nnueEngine ?? "stockfish") : ""
+
         enqueue {
             await self.runMoveAnalysis(
                 fen:            fen,
@@ -192,7 +278,8 @@ final class AnalysisStore: ObservableObject {
                 pieceType:      capturedPieceType,
                 moveNumber:     capturedMoveCount,
                 prevEval:       capturedPrevEval,
-                isAnalysisMode: isAnalysisMode
+                isAnalysisMode: isAnalysisMode,
+                nnueEngine:     capturedNNUEEngine
             )
         }
     }
@@ -207,25 +294,26 @@ final class AnalysisStore: ObservableObject {
         pieceType:      String,
         moveNumber:     Int,
         prevEval:       Int?,
-        isAnalysisMode: Bool
+        isAnalysisMode: Bool,
+        nnueEngine:     String
     ) async {
         isAnalysing = true
         defer { isAnalysing = false }
 
         do {
             let result = try await engine.analyse(
-                fen:                  fen,
-                movetime:             2000,
-                useStockfishEval:     appSettings?.useStockfishEval     ?? false,
-                useStockfishBestMove: appSettings?.useStockfishBestMove ?? false,
-                deep:                 isAnalysisMode
+                fen:            fen,
+                movetime:       appSettings?.evalTimeMs     ?? 2000,
+                evalEngine:     appSettings?.evalEngine     ?? "stockfish",
+                bestMoveEngine: appSettings?.bestMoveEngine ?? "lc0",
+                nnueEngine:     nnueEngine,
+                deep:           isAnalysisMode
             )
 
             let fenParts      = fen.split(separator: " ").map(String.init)
             let activeColor   = fenParts.count > 1 ? fenParts[1] : "w"
             let normScore     = normalise(cp: result.score_cp, activeColor: activeColor)
 
-            // Use 0 as baseline for first move so classification works correctly.
             let effectivePrevEval = prevEval ?? 0
 
             let classification = classifyMove(
@@ -273,46 +361,88 @@ final class AnalysisStore: ObservableObject {
 
             self.prevEval               = normScore
             self.scoreCP                = normScore
+            // FIX: was never set — now populated from the raw engine score
+            self.engineScoreCP          = result.score_cp
             self.wdl                    = result.wdl
             self.materialBalance        = result.material_balance
             self.mobilityWhite          = result.mobility_white
             self.mobilityBlack          = result.mobility_black
             self.depth                  = result.depth
             self.nodes                  = result.nodes
-            self.sfScoreCP              = result.sf_score_cp
+            // FIX: was result.deep_score_cp — field didn't exist on AnalysisResponse
+            // → compile error. Now defined in EngineModels.swift.
+            self.deepScoreCP            = result.deep_score_cp
             self.nnue                   = result.nnue
             self.lastFeedback           = result.feedback ?? ""
             self.currentCharacteristics = result.characteristics
             self.currentPV              = result.pv ?? []
+            self.gamePhase              = result.game_phase
+            // Pawn structure and king safety only populated in analysis mode
+            self.isolatedWhite          = result.isolated_white
+            self.isolatedBlack          = result.isolated_black
+            self.doubledWhite           = result.doubled_white
+            self.doubledBlack           = result.doubled_black
+            self.passedWhite            = result.passed_white
+            self.passedBlack            = result.passed_black
+            self.pawnStructure          = result.pawn_structure
+            self.kingAttackersWhite     = result.king_attackers_white
+            self.kingAttackersBlack     = result.king_attackers_black
+            self.kingCastledWhite       = result.king_castled_white
+            self.kingCastledBlack       = result.king_castled_black
 
-            // Fire LLM hook in analysis mode only
+            // Build LLM context for every move in analysis mode.
+            // Do NOT fire the LLM call here — store the context and fire lazily
+            // when the user navigates to this move in post-game review.
+            // This avoids LLM latency during analysis and keeps responses
+            // tied to the specific move the user is looking at.
             if isAnalysisMode {
+                let nnueTermCtx: (String) -> NNUETermContext? = { key in
+                    guard let term = result.nnue?[key] else { return nil }
+                    return NNUETermContext(white: term.white, black: term.black, total: term.total)
+                }
                 let ctx = LLMAnalysisContext(
-                    fen:               fen,
-                    movePlayed:        lastUCI,
-                    side:              side,
-                    moveNotation:      movePrefix,
-                    wdl:               result.wdl.map {
+                    fen:                fen,
+                    movePlayed:         lastUCI,
+                    side:               side,
+                    moveNotation:       movePrefix,
+                    wdl:                result.wdl.map {
                         WDLContext(white: $0.white, draw: $0.draw, black: $0.black)
                     },
-                    scoreCP:           normScore,
-                    confidence:        result.characteristics?.confidence ?? "Uncertain",
-                    pvLine:            result.pv ?? [],
-                    materialBalance:   result.material_balance ?? 0,
-                    mobilityWhite:     result.mobility_white ?? 0,
-                    mobilityBlack:     result.mobility_black ?? 0,
+                    scoreCP:            normScore,
+                    pvLine:             result.pv ?? [],
+                    materialBalance:    result.material_balance ?? 0,
+                    mobilityWhite:      result.mobility_white ?? 0,
+                    mobilityBlack:      result.mobility_black ?? 0,
                     moveClassification: classification.quality.rawValue,
-                    cpLoss:            cpLoss,
-                    sharpness:         result.characteristics?.sharpness ?? "Balanced",
-                    difficulty:        result.characteristics?.difficulty ?? "Intermediate",
-                    lineType:          result.characteristics?.line_type ?? "Quiet",
-                    alternatives:      alternatives.map {
+                    cpLoss:             cpLoss,
+                    positionType:       result.characteristics?.position_type      ?? "Equal",
+                    precisionRequired:  result.characteristics?.precision_required ?? "Low",
+                    evalStability:      result.characteristics?.eval_stability      ?? "Stable",
+                    lineType:           result.characteristics?.line_type           ?? "Quiet",
+                    alternatives:       alternatives.map {
                         LLMAlternative(move: $0.move, scoreCP: $0.scoreCP)
                     },
-                    depth:             result.depth,
-                    nodes:             result.nodes
+                    depth:              result.depth,
+                    nodes:              result.nodes,
+                    gamePhase:          result.game_phase,
+                    pawnStructure:      result.pawn_structure,
+                    passedWhite:        result.passed_white,
+                    passedBlack:        result.passed_black,
+                    isolatedWhite:      result.isolated_white,
+                    isolatedBlack:      result.isolated_black,
+                    kingAttackersWhite: result.king_attackers_white,
+                    kingAttackersBlack: result.king_attackers_black,
+                    kingCastledWhite:   result.king_castled_white,
+                    kingCastledBlack:   result.king_castled_black,
+                    nnueKingSafety:     nnueTermCtx("king_safety"),
+                    nnueMobility:       nnueTermCtx("mobility"),
+                    nnueThreats:        nnueTermCtx("threats"),
+                    nnuePassedPawns:    nnueTermCtx("passed_pawns")
                 )
-                LLMHookService.shared.analyse(context: ctx)
+                llmContexts[critique.id] = ctx
+                // Fire immediately — narrative is stored silently during play
+                // and only displayed when the user enters review mode.
+                LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
             }
 
         } catch {

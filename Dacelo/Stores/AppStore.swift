@@ -1,5 +1,21 @@
 // AppStore.swift
 // Dacelo
+//
+// Root coordinator. Owns and wires all child stores and services.
+// Injected into the view hierarchy as an @EnvironmentObject from DaceloApp.
+//
+// Ownership graph:
+//   AppStore
+//     ├── AppSettings       — persisted user preferences (@AppStorage)
+//     ├── EngineConnectionState — WebSocket connection status (@Published, MainActor)
+//     ├── EngineService     — WebSocket client (Swift actor)
+//     ├── GameStore         — live chess game state (ChessStore wrapper, MainActor)
+//     └── AnalysisStore     — move analysis, critiques, LLM contexts (MainActor)
+//
+// Key flows:
+//   connectToServer()     → EngineService.connect() + queryEngines() → AppSettings.availableEngines
+//   enterReviewMode()     → sets gameMode = .analysisOnly, fires fillMissingNarratives()
+//   newGame()             → resets GameStore + AnalysisStore, re-attaches observation
 
 import SwiftUI
 import Combine
@@ -38,11 +54,36 @@ final class AppStore: ObservableObject {
         Task {
             await engine.configure(host: settings.serverHost, port: settings.serverPort)
             await engine.connect()
+            // Immediately ask the server what engines it has registered.
+            // This populates the live pickers in SettingsView so the user
+            // never has to type engine names manually.
+            await refreshAvailableEngines()
         }
     }
 
     func disconnectFromServer() {
-        Task { await engine.disconnect() }
+        Task {
+            await engine.disconnect()
+            settings.availableEngines = []
+        }
+    }
+
+    // MARK: - Engine discovery
+
+    /// Query the server for its registered engine list and store in AppSettings.
+    /// Called automatically on connect; can also be triggered manually from Settings.
+    func refreshAvailableEngines() async {
+        let names = await engine.queryEngines()
+        settings.availableEngines = names
+
+        // If the user's saved engine names are no longer valid (e.g. they moved
+        // to a different server), fall back to the first available engine so
+        // nothing silently breaks.
+        if !names.isEmpty {
+            if !names.contains(settings.evalEngine)     { settings.evalEngine     = names.first! }
+            if !names.contains(settings.bestMoveEngine) { settings.bestMoveEngine = names.first! }
+            if !names.contains(settings.nnueEngine)     { settings.nnueEngine     = names.first! }
+        }
     }
 
     // MARK: - New Game
@@ -52,6 +93,16 @@ final class AppStore: ObservableObject {
         if let playerColor { gameStore.playerColor = playerColor }
         gameStore.newGame()
         analysis.clearHistory()
-        analysis.observe(gameStore)
+        analysis.observe(gameStore, settings: settings)
+    }
+
+    // MARK: - Review Mode
+
+    /// Switch to analysis mode and fill any LLM narratives that didn't
+    /// generate during play (e.g. LLM was offline).
+    /// analysisOnly IS review mode — no separate mode needed.
+    func enterReviewMode() {
+        gameStore.gameMode = .analysisOnly
+        analysis.fillMissingNarratives()
     }
 }

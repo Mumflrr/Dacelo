@@ -1,14 +1,19 @@
-// Lc0Robot.swift
+// UCIRobot.swift
 // Dacelo
+//
+// Engine-agnostic Chess.Robot implementation.
+// Communicates with whatever engine the server has registered as the
+// bestMoveEngine — defaults to "primary" but can be any name the server
+// advertises (e.g. "deep", "komodo", etc.).
 
 import Chess
 import Foundation
 
 // MARK: - RobotController
 //
-// Thread-safe controller shared between GameStore (MainActor) and Lc0Robot
-// (background thread). Replaces the old PausedFlag with a richer interface
-// that also supports depositing a manual move so the human can play for Leela.
+// Thread-safe controller shared between GameStore (MainActor) and UCIRobot
+// (background thread). Handles pause, cancel, and manual move submission
+// so the user can play moves on the engine's behalf when paused.
 
 final class RobotController: @unchecked Sendable {
     private let lock = NSLock()
@@ -26,12 +31,10 @@ final class RobotController: @unchecked Sendable {
         set { lock.withLock { _isCancelled = newValue } }
     }
 
-    /// Called from the UI when the user plays a move on behalf of Leela.
     func submitManualMove(from: Int, to: Int) {
         lock.withLock { _manualMove = (from: from, to: to) }
     }
 
-    /// Called from the robot thread to consume a pending manual move.
     func takeManualMove() -> (from: Int, to: Int)? {
         lock.withLock {
             let m = _manualMove
@@ -49,21 +52,26 @@ final class RobotController: @unchecked Sendable {
     }
 }
 
-// MARK: - Lc0Robot
+// MARK: - UCIRobot
 
-final class Lc0Robot: Chess.Robot {
+final class UCIRobot: Chess.Robot {
 
-    private let engine: EngineService
-    private let moveTimeMs: Int
-    weak var robotController: RobotController?
-    private var isEvaluating = false  // add as instance property
+    private let engine:          EngineService
+    private let moveTimeMs:      Int
+    /// Server-side engine name to use for move generation (e.g. "primary", "deep").
+    private let bestMoveEngine:  String
+    weak var robotController:    RobotController?
 
-    init(side: Chess.Side,
-         engine: EngineService,
-         moveTimeMs: Int = 3000,
-         robotController: RobotController? = nil) {
+    init(
+        side:            Chess.Side,
+        engine:          EngineService,
+        moveTimeMs:      Int             = 3000,
+        bestMoveEngine:  String          = "primary",
+        robotController: RobotController? = nil
+    ) {
         self.engine          = engine
         self.moveTimeMs      = moveTimeMs
+        self.bestMoveEngine  = bestMoveEngine
         self.robotController = robotController
         super.init(side: side, stopAfterMove: 200)
     }
@@ -71,23 +79,11 @@ final class Lc0Robot: Chess.Robot {
     // MARK: - Chess.Robot
 
     override func evalutate(board: Chess.Board) -> Chess.Move? {
-// In case we need to lock the evaluation to prevent multiple evals being sent rapidly
-//        guard !isEvaluating else {
-//                Thread.sleep(forTimeInterval: 0.5)
-//                return nil
-//        }
-//        isEvaluating = true
-//        defer { isEvaluating = false }
-//        
         guard let controller = robotController else { return nil }
         guard !controller.isCancelled else { return nil }
 
-        // If paused before thinking starts, wait for a manual move or resume.
         if controller.isPaused {
-            if let move = waitForManualMoveOrResume(controller: controller) {
-                return move
-            }
-            // Returned nil means we were resumed — fall through to engine.
+            if let move = waitForManualMoveOrResume(controller: controller) { return move }
             guard !controller.isCancelled else { return nil }
         }
 
@@ -98,11 +94,15 @@ final class Lc0Robot: Chess.Robot {
         Task {
             defer { semaphore.signal() }
             do {
-                let response = try await engine.engineMove(fen: fen, movetime: moveTimeMs)
+                let response = try await engine.engineMove(
+                    fen:            fen,
+                    movetime:       moveTimeMs,
+                    bestMoveEngine: bestMoveEngine
+                )
                 guard let fromStr = response.from, let toStr = response.to else {
-                    print("[Lc0Robot] Missing from/to in response"); return
+                    print("[UCIRobot:\(bestMoveEngine)] Missing from/to in response"); return
                 }
-                print("[Lc0Robot] Playing \(fromStr)-\(toStr)")
+                print("[UCIRobot:\(bestMoveEngine)] Playing \(fromStr)-\(toStr)")
                 let sideEffect: Chess.Move.SideEffect
                 if let promo = response.promotion, let piece = promotionPiece(promo) {
                     sideEffect = .promotion(piece: piece)
@@ -116,33 +116,27 @@ final class Lc0Robot: Chess.Robot {
                     sideEffect: sideEffect
                 )
             } catch {
-                print("[Lc0Robot] Error: \(error.localizedDescription)")
+                print("[UCIRobot:\(bestMoveEngine)] Error: \(error.localizedDescription)")
             }
         }
 
         let deadline = DispatchTime.now() + .milliseconds(moveTimeMs + 10_000)
         if semaphore.wait(timeout: deadline) == .timedOut {
-            print("[Lc0Robot] Timed out waiting for engine")
+            print("[UCIRobot:\(bestMoveEngine)] Timed out waiting for engine")
         }
 
         guard !controller.isCancelled else { return nil }
 
-        // If paused while the engine was thinking, wait for manual move or resume.
-        // The engine result is discarded in favour of the manual move.
         if controller.isPaused {
-            if let move = waitForManualMoveOrResume(controller: controller) {
-                return move
-            }
+            if let move = waitForManualMoveOrResume(controller: controller) { return move }
             guard !controller.isCancelled else { return nil }
         }
 
         return box.move
     }
 
-    // MARK: - Manual move / pause wait
+    // MARK: - Pause / manual move
 
-    /// Spins until either a manual move is submitted or the controller is resumed.
-    /// Returns the manual Chess.Move if one was submitted, nil if we were simply resumed.
     private func waitForManualMoveOrResume(controller: RobotController) -> Chess.Move? {
         while controller.isPaused && !controller.isCancelled {
             if let manual = controller.takeManualMove() {

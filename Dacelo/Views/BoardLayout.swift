@@ -1,4 +1,4 @@
-// DaceloboardView.swift
+// BoardView.swift
 // Dacelo
 
 import SwiftUI
@@ -6,7 +6,7 @@ import Chess
 
 // MARK: - Board
 
-struct DaceloboardView: View {
+struct BoardLayout: View {
     @EnvironmentObject var store:     ChessStore
     @EnvironmentObject var gameStore: GameStore
     let boardTheme: BoardTheme
@@ -22,7 +22,12 @@ struct DaceloboardView: View {
     @State private var dragOffset: CGSize          = .zero
     @State private var squareSize: CGFloat         = 0
     @State private var isDropping: Bool            = false
-
+    
+    init(boardTheme: BoardTheme, pieceSet: PieceSet, isFlipped: Bool) {
+            self.boardTheme = boardTheme
+            self.pieceSet = pieceSet
+            self.isFlipped = isFlipped
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -35,7 +40,7 @@ struct DaceloboardView: View {
                     ForEach(0..<64) { visualIdx in
                         let bIdx = boardIdx(visualIdx)
                         ZStack {
-                            DaceloSquareBackground(idx: bIdx, theme: boardTheme)
+                            SquareBackground(idx: bIdx, theme: boardTheme)
 
                             if !isDropping {
                                 SquareMoveHighlight(bIdx)
@@ -217,7 +222,7 @@ struct DaceloboardView: View {
 
 // MARK: - Custom square background
 
-struct DaceloSquareBackground: View {
+struct SquareBackground: View {
     @EnvironmentObject var store: ChessStore
     let idx: Int
     let theme: BoardTheme

@@ -8,17 +8,6 @@
 // that cancellation auto-resets the delta to .zero, causing a visible snap-back
 // jump every couple of pixels as the drawer moves and the cursor drifts outside
 // the shrinking/growing header hit zone.
-//
-// Fix:
-//   1. coordinateSpace: .global — gesture stays alive regardless of where the
-//      cursor is on screen. The view boundary no longer terminates the gesture.
-//   2. @State var liveDelta (not @GestureState) — we control resets manually,
-//      so a mid-gesture cancellation cannot force a jump.
-//   3. @GestureState var isActive — a boolean sentinel using .updating, which
-//      DOES auto-reset to false on cancel. We use its onChange to detect the
-//      cancel/end and commit the snap at that moment.
-//   4. .transaction { $0.animation = nil } on the whole view — prevents SwiftUI
-//      from animating from the notional layout origin on window moves/resizes.
 
 import SwiftUI
 

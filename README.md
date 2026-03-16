@@ -1,67 +1,63 @@
-# LeelaChessApp — iOS/macOS ↔ Windows PC via Tailscale
+# Dacelo — Chess Training App
 
-A chess app where your Apple devices use **Leela Chess Zero (lc0)** running on Windows PC
-as the AI engine. Communication happens over **Tailscale** private network. Allows for
-Player vs Engine with move analysis.
-
----
-
-## Architecture Overview
-
-```
-┌─────────────────────────────┐        Tailscale VPN        ┌──────────────────────────────┐
-│      iOS / macOS App        │  ◄── WebSocket (JSON) ──►   │        Windows PC            │
-│                             │                             │                              │
-│  SwiftUI BoardView          │                             │  lc0_server.py               │
-│  (swift-chess package)      │                             │   ├── WebSocket server :8765 │
-│                             │                             │   └── lc0.exe (UCI pipe)     │
-│  ChessStore (Combine)       │                             │                              │
-│  AppStore (ObservableObj)   │                             │  lc0_tray.py                 │
-│  NetworkService (WebSocket) │                             │   └── System tray on/off     │
-│  Lc0Player (custom player)  │                             │                              │
-│  AnalysisService            │                             │  lc0.exe + weights .pb.g     │
-└─────────────────────────────┘                             └──────────────────────────────┘
-```
-
-### Data Flow
-
-1. User taps a move on the board → swift-chess `ChessStore` updates game state
-2. If it's the engine's turn → `Lc0Player.move()` fires
-3. `NetworkService.engineMove(fen:)` sends JSON over WebSocket to PC
-4. `lc0_server.py` pipes `position fen … go movetime …` to `lc0.exe`
-5. lc0 replies; server sends JSON back
-6. `Lc0Player` calls `store.send(.make(move:))` to play the move
-7. After every move, `AnalysisService.analyse(fen:)` fetches feedback
+A chess training app for iOS and macOS that connects to one or more UCI engines
+running on a Windows PC over Tailscale. Designed to explain *why* moves are good
+or bad, not just whether they are.
 
 ---
 
-## Project Structure
+## What it does
+
+**During play (vs Engine or Two Players)**
+- Score, WDL bar, best continuation, move quality badge after every move
+- Material balance, piece mobility, game phase
+- Position characteristics: type (Equal→Critical), precision required, line type, eval stability
+- LLM commentary fires silently in the background as you play
+
+**In Analysis Mode** (enter any time — it's the same as post-game review)
+- Everything above, plus:
+- Stockfish NNUE term breakdown: Material, Imbalance, Pawns, Mobility, King Safety, Threats, Passed Pawns, Space
+- Pawn structure analysis: isolated, doubled, and passed pawns per side with coaching hints
+- King safety: attacker count in king zone, castled status, coaching hints
+- Per-move AI commentary from a local LLM (Ollama / LM Studio / llama.cpp)
+- Move history drawer with full review navigation
+
+---
+
+## Architecture
 
 ```
-LeelaChessApp/
-│
-├── Windows/                        ← Run on your PC
-│   ├── lc0_server.py               ← WebSocket server wrapping lc0 UCI
-│   ├── lc0_tray.py                 ← System tray start/stop controller
-│   ├── lc0_tray.bat                ← Double-click launcher (pin to taskbar)
-│   └── lc0_config.txt              ← Edit: lc0 path, port, threads
-│
-├── Xcode/
-│   └── LeelaChessApp/
-│       ├── LeelaChessApp.swift       ← @main SwiftUI entry point
-│       ├── Network/
-│       │   └── NetworkService.swift  ← WebSocket client, async/await API
-│       ├── Engine/
-│       │   └── Lc0Player.swift       ← Chess.Player that calls the server
-│       ├── Store/
-│       │   └── AppStore.swift        ← Wires ChessStore + services together
-│       ├── Views/
-│       │   └── ContentView.swift     ← Main UI + Settings
-│       └── AnalysisService/
-│           └── Analysis.swift        ← Control how analysis operates
-│
-└── Package.swift                   ← SPM manifest (or add via Xcode GUI)
+┌─────────────────────────────┐      Tailscale VPN       ┌──────────────────────────────────┐
+│      iOS / macOS App        │ ◄── WebSocket (JSON) ──► │        Windows PC                │
+│                             │                          │                                  │
+│  SwiftUI Views              │                          │  chess_server.py                 │
+│  ├── ContentView            │                          │  ├── WebSocket server :8765      │
+│  ├── AnalysisPanelViews     │                          │  ├── UCIEngine (one per engine)  │
+│  └── MoveHistoryView        │                          │  └── python-chess metrics        │
+│                             │                          │                                  │
+│  Stores (MainActor)         │                          │  server_tray.py                  │
+│  ├── AppStore (root)        │                          │  └── System tray start/stop      │
+│  ├── GameStore              │                          │                                  │
+│  └── AnalysisStore          │                          │  Engines/                        │
+│                             │                          │  ├── lc0.exe + weights.pb        │
+│  Services                   │                          │  ├── stockfish.exe               │
+│  ├── EngineService (actor)  │                          │  └── any UCI engine              │
+│  └── LLMHookService         │                          │                                  │
+└─────────────────────────────┘                          └──────────────────────────────────┘
 ```
+
+### Data flow
+
+1. User plays a move → `GameStore` (via swift-chess `ChessStore`) updates FEN
+2. `AnalysisStore` observes the FEN change, enqueues a move analysis task
+3. `EngineService.analyse()` sends JSON to `chess_server.py` over WebSocket
+4. Server runs the eval engine (Stockfish by default) + optional concurrent NNUE run
+5. Response returns score, WDL, alternatives, pawn structure, king safety, characteristics
+6. `AnalysisStore` updates all `@Published` state → UI re-renders
+7. In analysis mode: `LLMHookService.requestNarrative()` fires concurrently for the move
+8. LLM narrative fills into the move's card when it arrives (seconds to minutes later)
+
+If it is the engine's turn (`humanVsEngine` mode), `UCIRobot` calls `EngineService.engineMove()` in parallel — move generation and position analysis are independent.
 
 ---
 
@@ -69,182 +65,296 @@ LeelaChessApp/
 
 ### 1. Install Python dependencies
 
-Using the provided Conda environment (recommended):
+```powershell
+pip install websockets python-chess pystray pillow
+```
+
+Or with conda:
 
 ```powershell
-conda env create -f Windows/environment.yml
-conda activate lc0-server
+conda create -n dacelo python=3.11
+conda activate dacelo
+pip install websockets python-chess pystray pillow
 ```
 
-**Optional — cuDNN for better performance (NVIDIA GPUs only):**
+### 2. Download engines
 
-If you have an NVIDIA GPU and want ~10-15% faster analysis, install cuDNN via conda:
+**Stockfish** (required for full analysis — NNUE terms, calibrated WDL):
+- Download from https://stockfishchess.org/download/
+- Extract to `Windows/stockfish/stockfish.exe`
 
+**lc0** (optional — for playing against a neural network engine):
+- Download from https://github.com/LeelaChessZero/lc0/releases
+- Choose `cuda12` for NVIDIA GPU, `cpu-dnnl` for CPU-only
+- Extract to `Windows/lc0/lc0.exe`
+- Download a weights file from https://lczero.org/play/networks/bestnets/
+- Place the `.pb` file next to `lc0.exe`
+
+### 3. Configure `server_tray.py`
+
+Open `server_tray.py` and edit the `ENGINES` list at the top:
+
+```python
+ENGINES = [
+    (
+        "stockfish",
+        Path(__file__).parent / r"stockfish\stockfish.exe",
+        None,                    # Stockfish needs no weights file
+    ),
+    (
+        "lc0",
+        Path(__file__).parent / r"lc0\lc0.exe",
+        Path(__file__).parent / r"lc0\BT4-332.pb",
+    ),
+]
+
+PRIMARY_ENGINE = "lc0"   # Engine used when no specific engine is requested
+```
+
+Each tuple is `(name, exe_path, weights_path_or_None)`. The `name` is what you
+type in the app's Settings — it can be anything you want.
+
+### 4. Start the server
+
+**Option A — System tray (recommended):**
 ```powershell
-conda activate lc0-server
-conda install -c conda-forge cudnn
+pythonw server_tray.py
 ```
+A tray icon appears. Green = running. Right-click to stop or view logs.
 
-Then download the `cudnn` lc0 release instead of `cuda12`. Conda manages the DLLs automatically.
-
-### 2. Download lc0
-
-Download the latest Windows release from:
-https://github.com/LeelaChessZero/lc0/releases
-
-**Which version to download:**
-- **NVIDIA GPU**: Use `cuda12` (includes all DLLs, easiest) or `cudnn` for slightly better performance
-- **AMD/Intel GPU or CPU-only**: Use `cpu-dnnl` or `openblas`
-- **Using conda**: See cuDNN setup below for best performance
-
-Extract to base repo folder. You should have `path/to/repo/Windows/lc0/lc0.exe`.
-
-### 3. Download a neural network weights file
-
-Get the best network from:
-https://lczero.org/play/networks/bestnets/
-
-Place the `.pb.gz` (or extracted `.pb`) file in base repo folder and update `lc0_config.txt`:
-```
-weights = path\to\repo\Windows\lc0\<weights-file>.pb(.gz)
-```
-
-### 4. Edit lc0_config.txt
-
-```ini
-lc0     = path/to/repo/Windows/lc0/lc0.exe
-weights = path/to/repo/Windows/lc0/<weights-file>.pb.gz
-port    = 8765
-threads = 4
-```
-
-### 5. Run the server
-
-**Option A — Double-click**: `lc0_tray.bat` — a system tray icon appears (green = running)
-
-**Option B — Terminal**:
+**Option B — Terminal (easier for debugging):**
 ```powershell
-python lc0_server.py --lc0 ./lc0/lc0.exe --port 8765
+python chess_server.py \
+    --engine stockfish=stockfish/stockfish.exe \
+    --engine lc0=lc0/lc0.exe:lc0/BT4-332.pb \
+    --primary lc0 \
+    --port 8765 \
+    --threads 4
 ```
-**Port 8765** is arbitrary — you can use any port above 1024. Just update both `lc0_config.txt` and the app's Settings to match.
 
+**Option C — Stop a running tray server:**
+```powershell
+python server_tray.py --stop
+```
 
-### 6. Add to Windows Startup (optional)
+### 5. Auto-start on Windows login (optional)
 
-Press **Win + R** → type `shell:startup` → copy a shortcut to `lc0_tray.bat` into that folder.
-The server will start automatically when you log in.
+Press **Win + R** → type `shell:startup` → drop a shortcut to `server_tray.py` (or a `.bat` that runs it) into that folder.
+
+---
+
+## Adding a New Engine
+
+Dacelo is engine-agnostic. Any UCI-compliant engine works.
+
+### Server side
+
+Add an entry to the `ENGINES` list in `server_tray.py`:
+
+```python
+ENGINES = [
+    ("stockfish", Path(__file__).parent / r"stockfish\sf17.exe", None),
+    ("lc0",       Path(__file__).parent / r"lc0\lc0.exe",        Path(__file__).parent / r"lc0\weights.pb"),
+    ("komodo",    Path(__file__).parent / r"komodo\komodo.exe",   None),
+    # Add any UCI engine the same way:
+    # ("dragon",  Path(__file__).parent / r"dragon\dragon.exe",   None),
+]
+```
+
+**Engines with weights files** (lc0-style neural networks):
+- Pass the weights path as the third element
+- The server automatically appends `--weights=<path>` to the launch command
+
+**Engines without weights** (Stockfish, Komodo, etc.):
+- Pass `None` as the third element
+- The server detects these as "Stockfish-like" and enables `UCI_ShowWDL true` and `Use NNUE true` automatically, enabling the full NNUE breakdown
+
+### App side
+
+1. Restart the server after editing `server_tray.py`
+2. In the app's Settings, tap **Refresh Engines** (or disconnect and reconnect)
+3. The engine name dropdowns update automatically — select your new engine for:
+   - **Move engine**: plays as your opponent
+   - **Eval engine**: analyses every position (use Stockfish for NNUE breakdowns)
+   - **NNUE engine**: concurrent analysis-mode deep dive (must be Stockfish-compatible)
+
+No code changes required in the Swift app.
+
+### Engine capabilities
+
+| Feature | Stockfish | lc0 | Other UCI |
+|---|---|---|---|
+| Centipawn score | ✓ | ✓ | ✓ |
+| WDL probabilities | ✓ (15.1+) | ✓ | Varies |
+| NNUE term breakdown | ✓ | ✗ | ✗ |
+| Named eval terms (King Safety, Threats, etc.) | ✓ | ✗ | ✗ |
+| MultiPV alternatives | ✓ | ✓ | ✓ |
+
+Recommendation: use **Stockfish as the eval engine** for all analysis. Its WDL is calibrated against real human games, and its NNUE terms let the app explain *why* positions are good or bad. Use lc0 or another engine only as the **move engine** if you want to play against a different style of opponent.
 
 ---
 
 ## iOS / macOS Xcode Setup
 
-### 1. Create the Xcode Project
+### 1. Create the project
 
-- Open Xcode → **File → New → Project**
-- Choose **App** (iOS + macOS multiplatform or separate targets)
-- Product Name: `LeelaChessApp`, Interface: **SwiftUI**, Language: **Swift**
+- Xcode → **File → New → Project** → **App**
+- Product Name: `Dacelo`, Interface: **SwiftUI**, Language: **Swift**
 
-### 2. Add the swift-chess Package Dependency
+### 2. Add the swift-chess package
 
-- In Xcode: **Project → Package Dependencies → "+"**
-- Paste URL: `https://github.com/dpedley/swift-chess`
+- **Project → Package Dependencies → "+"**
+- URL: `https://github.com/dpedley/swift-chess`
 - Minimum version: `1.0.8`
-- Add to your app target
 
-### 3. Add the source files
+### 3. Add source files
 
-Copy the files from `Xcode/LeelaChessApp/` into your Xcode project groups:
+Copy all `.swift` files from `Xcode/Dacelo/` into your project. Key groups:
 
-| File | Group |
-|------|-------|
-| `LeelaChessApp.swift` | root |
-| `Network/NetworkService.swift` | Network |
-| `Engine/Lc0Player.swift` | Engine |
-| `Store/AppStore.swift` | Store |
-| `Views/ContentView.swift` | Views |
+| File | Role |
+|---|---|
+| `AppStore.swift` | Root coordinator, owns all child stores |
+| `AppSettings.swift` | Persisted user preferences |
+| `GameStore.swift` | Live chess game state |
+| `AnalysisStore.swift` | Move analysis, critiques, LLM contexts |
+| `EngineService.swift` | WebSocket client (Swift actor) |
+| `EngineModels.swift` | Decodable response types |
+| `UCIRobot.swift` | Chess.Player that calls the engine |
+| `LLMHookService.swift` | Per-move AI commentary |
+| `ContentView.swift` | Main UI + Settings |
+| `AnalysisPanelViews.swift` | All analysis panel components |
+| `MoveHistoryView.swift` | Move history cards and review UI |
+| `MoveHistoryDrawer.swift` | Drag-to-expand bottom drawer |
+| `PositionCharacteristics.swift` | Position characteristics model |
+| `MoveCritique.swift` | Per-move analysis model |
 
 ### 4. Configure network permissions
 
-**For macOS:** 
-- Click your target → **Signing & Capabilities** tab → **+ Capability** → **App Sandbox**
-- Under App Sandbox, check **✅ Outgoing Connections (Client)**
+**macOS** — Signing & Capabilities → App Sandbox → check **Outgoing Connections (Client)**
 
-**For iOS:**
-- Click your target → **Info** tab → Add these three keys:
+**iOS** — Info tab, add:
 
-| Key | Type | Value |
-|-----|------|-------|
-| `App Transport Security Settings` | Dictionary | (add sub-keys below) |
-| └─ `Allow Arbitrary Loads in Web Content` | Boolean | `YES` |
-| `Privacy - Local Network Usage Description` | String | `"Connect to Windows PC via Tailscale for lc0 analysis"` |
-| `Bonjour services` | Array | Item 0: `_ws._tcp` |
+| Key | Value |
+|---|---|
+| App Transport Security → Allow Arbitrary Loads in Web Content | YES |
+| Privacy - Local Network Usage Description | `"Connect to chess engine over Tailscale"` |
+| Bonjour services | `_ws._tcp` |
 
-These allow plain WebSocket (`ws://`) over your Tailscale VPN and trigger the local network permission prompt on iOS.
+### 5. Build and run
 
-### 5. Configure your Tailscale hostname
-
-In the app's **Settings screen** (gear icon), enter:
-- **Tailscale Host**: your Windows PC's Tailscale hostname or IP (e.g. `my-gaming-pc` or `100.64.0.5`)
-- **Port**: `8765`
-
-Find your PC's Tailscale IP in the Tailscale app or at https://login.tailscale.com/admin/machines
-
-### 6. Build and run
-
-The app will automatically try to connect when launched.
+Launch the app, go to **Settings** (gear icon), enter your Windows PC's Tailscale hostname or IP and port, then tap **Connect**. Engine name dropdowns populate automatically from the server.
 
 ---
 
-## Protocol Reference
+## Settings Reference
 
-### Client → Server
+| Setting | Default | Description |
+|---|---|---|
+| Server Host | `your-pc-hostname` | Tailscale hostname or `100.x.x.x` IP |
+| Port | `8765` | Must match `--port` on the server |
+| Move engine | `lc0` | UCI engine name for opponent moves |
+| Move think time | `3000ms` | Time budget per engine move |
+| Eval engine | `stockfish` | UCI engine name for position analysis |
+| Eval think time | `2000ms` | Time budget per analysis call |
+| NNUE engine | `stockfish` | Engine for deep analysis-mode breakdown |
+| Show best-move arrow | on | Yellow arrow on the board after each move |
+| Hint arrows | 1 | Number of hint arrows shown on request |
+| LLM endpoint | `http://localhost:11434` | Ollama / LM Studio / llama.cpp server URL |
+| LLM model | `llama3` | Model name as registered in your LLM server |
 
-| Command | Payload | Description |
-|---------|---------|-------------|
-| `analyse` | `{"cmd":"analyse","fen":"...","movetime":2000}` | Get engine eval + best move |
-| `engine_move` | `{"cmd":"engine_move","fen":"...","movetime":3000}` | Engine picks and returns a move |
-| `ping` | `{"cmd":"ping"}` | Keep-alive |
+Engine names must exactly match the `name` field in the server's `ENGINES` list. Tap **Refresh Engines** after changing the server config to re-populate the dropdowns.
 
-### Server → Client
+---
 
-| Type | Key fields | Description |
-|------|-----------|-------------|
-| `analysis` | `bestmove`, `score_cp`, `feedback`, `pv` | Analysis result |
-| `engine_move` | `move`, `from`, `to`, `promotion` | Engine's chosen move |
-| `pong` | — | Reply to ping |
-| `error` | `message` | Something went wrong |
+## WebSocket Protocol Reference
+
+All messages are JSON. Client → Server:
+
+| `cmd` | Additional fields | Description |
+|---|---|---|
+| `engines` | — | Request list of registered engine names |
+| `ping` | — | Keep-alive (server replies `{"type":"pong"}`) |
+| `new_game` | — | Reset all engine game state |
+| `analyse` | `fen`, `movetime`, `eval_engine`, `best_move_engine`, `nnue_engine`, `deep` | Full position analysis |
+| `engine_move` | `fen`, `movetime`, `engine` | Request best move from an engine |
+
+Server → Client (key fields):
+
+| `type` | Key fields |
+|---|---|
+| `engines` | `engines: [String]`, `primary: String` |
+| `analysis` | `score_cp`, `wdl`, `feedback`, `pv`, `alternatives`, `characteristics`, `material_balance`, `mobility_*`, `game_phase`, `nnue`, `pawn_structure`, `isolated_*`, `doubled_*`, `passed_*`, `king_attackers_*`, `king_castled_*`, `deep_score_cp` |
+| `engine_move` | `move`, `from`, `to`, `promotion`, `score_cp`, `pv` |
+| `error` | `message` |
+
+The `deep` flag on `analyse` enables analysis-mode metrics (pawn structure, king safety) computed via python-chess, and triggers the concurrent NNUE engine run if `nnue_engine` is set.
+
+---
+
+## LLM Commentary Setup
+
+Dacelo supports any Ollama-compatible local LLM server.
+
+**Ollama (simplest):**
+```bash
+# Install from https://ollama.com
+ollama pull llama3        # or mistral, gemma2, phi3, etc.
+ollama serve              # starts on localhost:11434
+```
+
+**LM Studio:**
+- Load any GGUF model, start the local server
+- Set endpoint to `http://localhost:1234` in Settings
+
+**llama.cpp server:**
+```bash
+./server -m model.gguf --port 11434
+```
+
+The LLM prompt is automatically enriched with position context: eval score, WDL, game phase, pawn structure, king safety, NNUE term values (if Stockfish ran), and the engine's best continuation. Commentary fires in the background as you play and appears in the move card when you select it in Analysis Mode.
 
 ---
 
 ## Troubleshooting
 
-**Conda "command not found" on Windows**
-- Open **Anaconda Prompt** (not PowerShell) → run `conda init powershell` and `conda init cmd.exe`
-- Open PowerShell **as Administrator** → run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
-- Close and reopen all terminal windows for changes to take effect
-- If still broken, manually add these to your PATH: `C:\Users\<YourUsername>\miniconda3`, `...\Scripts`, `...\condabin`
+**"Not connected" / timeout**
+- Confirm Tailscale is running on both devices: `ping <tailscale-ip>` from Mac/iPhone
+- Tailscale's `100.x.x.x` addresses bypass the Windows firewall — no inbound rule needed
+- Check `chess_server.log` in the Windows folder for UCI handshake errors
 
-**"Not connected" / connection timeout**
-- Confirm Tailscale is running on both devices and the PC is reachable: `ping <tailscale-ip>` from your Mac/iPhone
-- If using Tailscale, you do NOT need to open Windows Firewall (the `100.x.x.x` IP bypasses it)
-- Check `lc0_server.log` in the Windows folder for errors
-- Make sure you entered the correct Tailscale IP in the app's Settings (not your public IP)
+**Engine names show as text fields instead of dropdowns**
+- The app hasn't connected yet, or the connection was lost
+- Tap **Connect** in Settings, then **Refresh Engines**
 
 **lc0 crashes on startup**
-- The lc0 binary requires a compatible GPU driver; check your CUDA/DirectML installation
-- Try a CPU-only build: download `lc0-…-cpu-dnnl.zip` from the releases page
+- Check your GPU driver; try a CPU-only build (`lc0-…-cpu-dnnl.zip`)
 
-**Engine never responds**
-- Check `lc0_server.log` — the UCI handshake must complete (`lc0 is ready`)
-- Try increasing movetime to 5000ms in Settings
+**NNUE breakdown never appears**
+- `nnueEngine` in Settings must match a Stockfish-compatible engine name on the server
+- NNUE breakdown only appears in Analysis Mode (`deep=true` requests)
+- Check the server log for `nnue_engine not found` warnings
 
-**BoardView not rendering**
-- Ensure the Chess package was added to the correct target and `import Chess` compiles
+**LLM commentary never appears**
+- Tap **Apply & Test** in the AI Commentary settings section — the dot should go green
+- Ensure the LLM server is running before connecting the chess server
+- Commentary only displays in Analysis Mode when a move card is selected
+
+**Conda "command not found" on Windows**
+- Open Anaconda Prompt → run `conda init powershell` and `conda init cmd.exe`
+- Run PowerShell as Administrator → `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ---
 
-## License
+## Dependencies
 
-- **lc0**: GPL-3.0 — https://github.com/LeelaChessZero/lc0
-- **swift-chess**: MIT — https://github.com/dpedley/swift-chess
-- **This project**: MIT
+| Dependency | License | Purpose |
+|---|---|---|
+| [swift-chess](https://github.com/dpedley/swift-chess) | MIT | Board, move generation, game state |
+| [websockets](https://github.com/aaugustin/websockets) | BSD | Python WebSocket server |
+| [python-chess](https://github.com/niklasf/python-chess) | GPL-3 | FEN parsing, pawn/king analysis |
+| [pystray](https://github.com/moses-palmer/pystray) | LGPL | Windows system tray |
+| [Pillow](https://python-pillow.org) | HPND | Tray icon rendering |
+| Stockfish | GPL-3 | Position evaluation, NNUE analysis |
+| lc0 | GPL-3 | Neural network chess engine |
+
+This project: MIT

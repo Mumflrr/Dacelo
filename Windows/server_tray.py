@@ -1,15 +1,15 @@
 """
-lc0_tray.py — System Tray for the lc0 WebSocket Server
+server_tray.py — System Tray for the Chess WebSocket Server
 
 Usage:
-    pythonw lc0_tray.py          # start tray (server auto-starts, no console)
-    python  lc0_tray.py --stop   # stop a running server and exit
+    pythonw server_tray.py          # start tray (server auto-starts, no console)
+    python  server_tray.py --stop   # stop a running server and exit
 
 Requirements:
     pip install pystray pillow
 
 To start on Windows login:
-    Win+R → shell:startup → drop a shortcut to lc0_tray.bat there.
+    Win+R → shell:startup → drop a shortcut to server_tray.bat there.
 """
 
 import subprocess, sys, os, threading, time, ctypes
@@ -18,16 +18,43 @@ import pystray
 from PIL import Image, ImageDraw, ImageFont
 
 # ── Configuration — edit these lines ─────────────────────────────────────────
-LC0_EXE     = Path(__file__).parent / r"lc0\lc0.exe"
-LC0_WEIGHTS = Path(__file__).parent / r"lc0\BT4-332.pb"
-LC0_PORT    = 8765
-LC0_THREADS = 4
+#
+# Add one tuple per engine: (name, exe_path, weights_path_or_None)
+#
+#   name         — the engine ID used in JSON (e.g. "lc0", "stockfish", "komodo")
+#   exe_path     — full path to the UCI binary
+#   weights_path — path to a weights/network file, or None if not applicable
+#
+# The first entry becomes the "primary" engine unless PRIMARY_ENGINE overrides it.
+
+ENGINES = [
+    (
+        "lc0",
+        Path(__file__).parent / r"lc0\lc0.exe",
+        Path(__file__).parent / r"lc0\BT4-332.pb",
+    ),
+    # Uncomment and configure additional engines as needed:
+    # (
+    #     "stockfish",
+    #     Path(__file__).parent / r"stockfish\stockfish.exe",
+    #     None,
+    # ),
+    # (
+    #     "komodo",
+    #     Path(__file__).parent / r"komodo\komodo.exe",
+    #     None,
+    # ),
+]
+
+SERVER_PORT    = 8765
+SERVER_THREADS = 4
+PRIMARY_ENGINE = ""   # Leave empty to default to the first ENGINES entry
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR    = Path(__file__).parent
-SERVER_SCRIPT = SCRIPT_DIR / "lc0_server.py"
-LOG_FILE      = SCRIPT_DIR / "lc0_server.log"
-PID_FILE      = SCRIPT_DIR / "lc0_server.pid"
+SERVER_SCRIPT = SCRIPT_DIR / "chess_server.py"
+LOG_FILE      = SCRIPT_DIR / "chess_server.log"
+PID_FILE      = SCRIPT_DIR / "chess_server.pid"
 PYTHON_EXE    = sys.executable
 
 
@@ -49,13 +76,6 @@ def _clear_pid():
         pass
 
 def _pid_alive(pid: int) -> bool:
-    """
-    Check if a process is alive by opening it with SYNCHRONIZE and calling
-    WaitForSingleObject with a 0 timeout.
-      WAIT_TIMEOUT  (0x102) → process is still running
-      WAIT_OBJECT_0 (0x000) → process has exited
-      WAIT_FAILED   (0xFFFFFFFF) → no such process / access denied
-    """
     SYNCHRONIZE = 0x00100000
     WAIT_TIMEOUT = 0x00000102
     k32 = ctypes.windll.kernel32
@@ -64,25 +84,17 @@ def _pid_alive(pid: int) -> bool:
         return False
     result = k32.WaitForSingleObject(handle, 0)
     k32.CloseHandle(handle)
-    return result == WAIT_TIMEOUT   # still running
+    return result == WAIT_TIMEOUT
 
 def _terminate_pid(pid: int, timeout: float = 5.0):
-    """
-    Graceful termination first (CTRL_BREAK_EVENT to the process group),
-    then force-kill if it doesn't exit within timeout seconds.
-    """
     PROCESS_TERMINATE = 0x0001
     SYNCHRONIZE       = 0x00100000
     WAIT_TIMEOUT_CODE = 0x00000102
     k32 = ctypes.windll.kernel32
-
-    # Send CTRL_BREAK so Python's KeyboardInterrupt / asyncio runs cleanup
     try:
-        os.kill(pid, ctypes.c_int(1).value)  # CTRL_BREAK_EVENT = 1
+        os.kill(pid, ctypes.c_int(1).value)   # CTRL_BREAK_EVENT
     except (OSError, PermissionError):
         pass
-
-    # Wait up to timeout for graceful exit
     h = k32.OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, False, pid)
     if not h:
         return
@@ -90,8 +102,7 @@ def _terminate_pid(pid: int, timeout: float = 5.0):
     while time.monotonic() < deadline:
         if k32.WaitForSingleObject(h, 100) != WAIT_TIMEOUT_CODE:
             k32.CloseHandle(h)
-            return   # exited cleanly
-    # Still alive — force kill
+            return
     k32.TerminateProcess(h, 1)
     k32.CloseHandle(h)
 
@@ -111,7 +122,7 @@ def make_icon(running: bool) -> Image.Image:
         font = ImageFont.truetype("arial.ttf", 16)
     except (IOError, OSError):
         font = ImageFont.load_default()
-    text = "lc0"
+    text = "UCI"
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     draw.text(((size - tw) // 2, (size - th) // 2 - 3), text, fill="white", font=font)
@@ -120,14 +131,34 @@ def make_icon(running: bool) -> Image.Image:
 
 # ── Server manager ────────────────────────────────────────────────────────────
 
+def _build_server_cmd() -> list[str]:
+    """
+    Build the command list for launching chess_server.py.
+    Each engine in ENGINES becomes a --engine NAME=EXE[:WEIGHTS] argument.
+    """
+    cmd = [
+        PYTHON_EXE, str(SERVER_SCRIPT),
+        f"--port={SERVER_PORT}",
+        f"--threads={SERVER_THREADS}",
+    ]
+    if PRIMARY_ENGINE:
+        cmd.append(f"--primary={PRIMARY_ENGINE}")
+
+    for name, exe, weights in ENGINES:
+        spec = f"{name}={exe}"
+        if weights:
+            spec += f":{weights}"
+        cmd.append(f"--engine={spec}")
+
+    return cmd
+
+
 class ServerManager:
     def __init__(self):
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
-        # Separate from _lock so the enabled-lambda never deadlocks the tray thread
         self._running_flag = threading.Event()
 
-        # Adopt any server already running from a previous launch
         pid = _read_pid()
         if pid and _pid_alive(pid):
             self._external_pid: int | None = pid
@@ -138,19 +169,13 @@ class ServerManager:
 
     @property
     def running(self) -> bool:
-        """
-        Fast, lock-free check used by the menu's enabled lambdas.
-        Uses the Event flag which is kept in sync by start() / stop().
-        """
         return self._running_flag.is_set()
 
     def _check_still_alive(self) -> bool:
-        """Authoritative check — used inside start/stop where we hold _lock."""
         if self._proc and self._proc.poll() is None:
             return True
         if self._external_pid and _pid_alive(self._external_pid):
             return True
-        # Process died unexpectedly — clean up
         self._proc = None
         self._external_pid = None
         self._running_flag.clear()
@@ -161,13 +186,7 @@ class ServerManager:
         with self._lock:
             if self._check_still_alive():
                 return
-            cmd = [
-                PYTHON_EXE, str(SERVER_SCRIPT),
-                f"--lc0={LC0_EXE}",
-                f"--weights={LC0_WEIGHTS}",
-                f"--port={LC0_PORT}",
-                f"--threads={LC0_THREADS}",
-            ]
+            cmd = _build_server_cmd()
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(SCRIPT_DIR),
@@ -188,7 +207,6 @@ class ServerManager:
             self._running_flag.clear()
             _clear_pid()
 
-        # Terminate outside the lock so _pid_alive polling doesn't deadlock
         if pid_to_kill:
             _terminate_pid(pid_to_kill)
 
@@ -199,8 +217,9 @@ manager = ServerManager()
 
 def _refresh(icon: pystray.Icon):
     running = manager.running
+    engine_names = ", ".join(name for name, *_ in ENGINES)
     icon.icon  = make_icon(running)
-    icon.title = "lc0 — Running" if running else "lc0 — Stopped"
+    icon.title = f"Chess Server ({engine_names}) — {'Running' if running else 'Stopped'}"
 
 def on_start(icon, item):
     manager.start()
@@ -214,7 +233,6 @@ def on_log(icon, item):
     if LOG_FILE.exists():
         os.startfile(str(LOG_FILE))
     else:
-        # Log doesn't exist yet — open the folder so the user can see what's there
         os.startfile(str(SCRIPT_DIR))
 
 def on_quit(icon, item):
@@ -226,9 +244,9 @@ def on_quit(icon, item):
 
 def main():
     icon = pystray.Icon(
-        name="lc0",
+        name="chess_server",
         icon=make_icon(False),
-        title="lc0 — Starting…",
+        title="Chess Server — Starting…",
         menu=pystray.Menu(
             pystray.MenuItem("▶  Start", on_start, enabled=lambda i: not manager.running),
             pystray.MenuItem("⏹  Stop",  on_stop,  enabled=lambda i: manager.running),
@@ -247,12 +265,12 @@ if __name__ == "__main__":
     if "--stop" in sys.argv:
         pid = _read_pid()
         if pid and _pid_alive(pid):
-            print(f"Stopping lc0 server (PID {pid})…")
+            print(f"Stopping chess server (PID {pid})…")
             _terminate_pid(pid)
             _clear_pid()
             print("Stopped.")
         else:
-            print("lc0 server is not running.")
+            print("Chess server is not running.")
             _clear_pid()
         sys.exit(0)
 
