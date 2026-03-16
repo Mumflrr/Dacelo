@@ -1,0 +1,53 @@
+2026-03-15 23:41:47,468 [INFO] Engine 'stockfish':     exe=D:\Github_Repos\Dacelo\Windows\D (exists=False)
+2026-03-15 23:41:47,469 [INFO]   weights: D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe (exists=True)
+2026-03-15 23:41:47,469 [INFO] [stockfish] Launching: D:\Github_Repos\Dacelo\Windows\D --weights=D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe
+2026-03-15 23:55:08,361 [INFO] Engine 'stockfish':     exe=D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe (exists=True)
+2026-03-15 23:55:08,361 [INFO] [stockfish] Launching: D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe
+2026-03-15 23:55:08,366 [INFO] Engine 'lc0':           exe=D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe (exists=True)
+2026-03-15 23:55:08,366 [INFO]   weights: D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb (exists=True)
+2026-03-15 23:55:08,366 [INFO] [lc0] Launching: D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe --weights=D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb
+2026-03-15 23:55:08,369 [INFO] Primary engine: 'stockfish'
+2026-03-15 23:55:08,369 [INFO] Port: 1024 | Threads: 1 | python-chess: available
+2026-03-15 23:55:08,369 [INFO] Waiting for UCI handshake: stockfish …
+2026-03-15 23:55:08,591 [INFO] [stockfish] ready
+2026-03-15 23:55:08,591 [INFO] Engine 'stockfish' ready
+2026-03-15 23:55:08,591 [INFO] Waiting for UCI handshake: lc0 …
+2026-03-15 23:55:08,592 [INFO] [lc0] ready
+2026-03-15 23:55:08,592 [INFO] Engine 'lc0' ready
+2026-03-15 23:55:08,592 [INFO] WebSocket server on ws://0.0.0.0:1024
+2026-03-15 23:55:08,693 [INFO] server listening on 0.0.0.0:1024
+2026-03-15 23:55:08,693 [INFO] Server live — waiting for connections  (Ctrl+C or type 'quit' to stop)
+2026-03-15 23:58:07,771 [INFO] Engine 'stockfish':     exe=D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe (exists=True)
+2026-03-15 23:58:07,771 [INFO] [stockfish] Launching: D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe
+2026-03-15 23:58:07,775 [INFO] Engine 'lc0':           exe=D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe (exists=True)
+2026-03-15 23:58:07,775 [INFO]   weights: D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb (exists=True)
+2026-03-15 23:58:07,775 [INFO] [lc0] Launching: D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe --weights=D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb
+2026-03-15 23:58:07,778 [INFO] Primary engine: 'stockfish'
+2026-03-15 23:58:07,778 [INFO] Port: 1024 | Threads: 1 | python-chess: available
+2026-03-15 23:58:07,778 [INFO] Waiting for UCI handshake: stockfish …
+2026-03-15 23:58:07,996 [INFO] [stockfish] ready
+2026-03-15 23:58:07,997 [INFO] Engine 'stockfish' ready
+2026-03-15 23:58:07,997 [INFO] Waiting for UCI handshake: lc0 …
+2026-03-15 23:58:07,997 [INFO] [lc0] ready
+2026-03-15 23:58:07,997 [INFO] Engine 'lc0' ready
+2026-03-15 23:58:07,997 [INFO] WebSocket server on ws://0.0.0.0:1024
+2026-03-15 23:58:08,014 [INFO] server listening on 0.0.0.0:1024
+2026-03-15 23:58:08,014 [INFO] Server live — waiting for connections  (Ctrl+C or type 'quit' to stop)
+2026-03-15 23:59:34,099 [INFO] Engine 'stockfish':     exe=D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe (exists=True)
+2026-03-15 23:59:34,099 [INFO] [stockfish] Launching: D:\Github_Repos\Dacelo\Windows\stockfish\stockfish.exe
+2026-03-15 23:59:34,103 [INFO] Engine 'lc0':           exe=D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe (exists=True)
+2026-03-15 23:59:34,103 [INFO]   weights: D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb (exists=True)
+2026-03-15 23:59:34,104 [INFO] [lc0] Launching: D:\Github_Repos\Dacelo\Windows\lc0\lc0.exe --weights=D:\Github_Repos\Dacelo\Windows\lc0\BT4-332.pb
+2026-03-15 23:59:34,106 [INFO] Primary engine: 'stockfish'
+2026-03-15 23:59:34,107 [INFO] Port: 1024 | Threads: 6 | python-chess: available
+2026-03-15 23:59:34,107 [INFO] Waiting for UCI handshake: stockfish …
+2026-03-15 23:59:34,324 [INFO] [stockfish] ready
+2026-03-15 23:59:34,324 [INFO] Engine 'stockfish' ready
+2026-03-15 23:59:34,324 [INFO] Waiting for UCI handshake: lc0 …
+2026-03-15 23:59:34,324 [INFO] [lc0] ready
+2026-03-15 23:59:34,324 [INFO] Engine 'lc0' ready
+2026-03-15 23:59:34,325 [INFO] WebSocket server on ws://0.0.0.0:1024
+2026-03-15 23:59:34,341 [INFO] server listening on 0.0.0.0:1024
+2026-03-15 23:59:34,342 [INFO] Server live — waiting for connections  (Ctrl+C or type 'quit' to stop)
+2026-03-16 00:00:13,065 [INFO] connection open
+2026-03-16 00:00:13,065 [INFO] Client connected: ('100.119.18.113', 57386)

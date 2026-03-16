@@ -62,6 +62,12 @@ If it is the engine's turn (`humanVsEngine` mode), `UCIRobot` calls `EngineServi
 ---
 
 ## Windows Setup
+(Only Windows is officially supported, but MacOS and Linux should work without much difficulty
+)
+### 0. Notes
+Please note the current installations are designed for CUDA12 with LC0, and AVX512 with stockfish.
+They may have to be updated depending on your architecure.
+Also note the conda environment comes with cuda12, which may or may not be compatible with your pc.
 
 ### 1. Install Python dependencies
 

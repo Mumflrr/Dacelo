@@ -26,11 +26,19 @@ if "%~1"=="--stop" (
 :: pythonw suppresses the console window so only the GUI appears.
 :: Falls back to python if pythonw is not on PATH (e.g. some conda envs).
 
-where pythonw >nul 2>&1
+where conda >nul 2>&1
 if not errorlevel 1 (
-    start "" pythonw dacelo_server_gui.py
+    call conda activate chess-server 2>nul
+    python dacelo_server_gui.py
+
+    if errorlevel 1 (
+        echo.
+        echo ======================================
+        echo [ERROR] ChessServer failed to start!
+        echo ======================================
+        pause
+    )
+
     exit /b
 )
 
-:: pythonw not found — use python (console window will flash briefly)
-start "" python dacelo_server_gui.py

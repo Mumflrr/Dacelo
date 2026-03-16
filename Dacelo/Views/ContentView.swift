@@ -29,7 +29,7 @@ struct ContentView: View {
     private var analysisStops: [Gradient.Stop] {
         [
             .init(color: .black,                 location: 0.00),
-            .init(color: .indigo.opacity(0.35),  location: 0.35),
+            .init(color: .indigo.opacity(0.40),  location: 0.60),
             .init(color: .purple.opacity(0.45),  location: 0.85),
             .init(color: .black.opacity(0.95),   location: 1.00)
         ]

@@ -936,19 +936,23 @@ def _stdin_quit_watcher(loop: asyncio.AbstractEventLoop):
 
 def parse_engine_spec(spec: str) -> tuple[str, str, Optional[str]]:
     """
-    Parse 'NAME=EXE[:WEIGHTS]' into (name, exe_path, weights_path_or_None).
+    Parse 'NAME=EXE[|WEIGHTS]' into (name, exe_path, weights_path_or_None).
+
+    The separator between exe and weights is | (pipe) not : (colon) so that
+    Windows absolute paths (e.g. D:\path\to\lc0.exe) are not misread —
+    the drive-letter colon would otherwise be treated as the separator.
 
     Examples:
-      lc0=lc0/lc0.exe:lc0/BT4-332.pb  → ('lc0', 'lc0/lc0.exe', 'lc0/BT4-332.pb')
-      stockfish=sf/stockfish.exe        → ('stockfish', 'sf/stockfish.exe', None)
+      lc0=D:\lc0\lc0.exe|D:\lc0\BT4.pb  → ('lc0', 'D:\lc0\lc0.exe', 'D:\lc0\BT4.pb')
+      stockfish=D:\sf\stockfish.exe         → ('stockfish', 'D:\sf\stockfish.exe', None)
     """
     if "=" not in spec:
         raise ValueError(
-            f"Invalid engine spec '{spec}': expected NAME=EXE or NAME=EXE:WEIGHTS"
+            f"Invalid engine spec '{spec}': expected NAME=EXE or NAME=EXE|WEIGHTS"
         )
     name, rest = spec.split("=", 1)
-    if ":" in rest:
-        exe, weights = rest.split(":", 1)
+    if "|" in rest:
+        exe, weights = rest.split("|", 1)
     else:
         exe, weights = rest, None
     return name.strip(), exe.strip(), (weights.strip() if weights else None)

@@ -1,0 +1,33 @@
+{
+  "engines": [
+    {
+      "enabled": true,
+      "name": "stockfish",
+      "exe": "D:\\Github_Repos\\Dacelo\\Windows\\stockfish\\stockfish.exe",
+      "weights": ""
+    },
+    {
+      "enabled": true,
+      "name": "lc0",
+      "exe": "D:\\Github_Repos\\Dacelo\\Windows\\lc0\\lc0.exe",
+      "weights": "D:\\Github_Repos\\Dacelo\\Windows\\lc0\\BT4-332.pb"
+    },
+    {
+      "enabled": true,
+      "name": "",
+      "exe": "",
+      "weights": ""
+    }
+  ],
+  "primary": "stockfish",
+  "port": 1024,
+  "threads": 6,
+  "start_minimized": false,
+  "llm": {
+    "enabled": false,
+    "exe": "",
+    "model": "",
+    "port": 11434,
+    "threads": 4
+  }
+}
