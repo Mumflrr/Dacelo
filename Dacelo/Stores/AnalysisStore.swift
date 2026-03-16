@@ -56,6 +56,8 @@ final class AnalysisStore: ObservableObject {
     @Published var currentCharacteristics: PositionCharacteristics?    = nil
     @Published var currentPV:             [String]                     = []
     @Published var selectedCritiqueIndex:  Int?                        = nil
+    // True when the user is browsing a past position (board and panel show historical data).
+    @Published var isReviewingHistory:     Bool                        = false
     @Published var gamePhase:             String?                      = nil
     /// LLM context keyed by MoveCritique.id — used for lazy narrative generation.
     /// Built during analysis, consumed lazily when the user navigates to a move.
@@ -80,12 +82,71 @@ final class AnalysisStore: ObservableObject {
     func goBack() {
         guard !moveCritiques.isEmpty else { return }
         let current = selectedCritiqueIndex ?? (moveCritiques.count - 1)
-        selectedCritiqueIndex = max(0, current - 1)
+        selectCritique(at: max(0, current - 1))
     }
+
     func goForward() {
         guard let idx = selectedCritiqueIndex else { return }
         let next = idx + 1
-        selectedCritiqueIndex = next >= moveCritiques.count ? nil : next
+        if next >= moveCritiques.count {
+            clearCritiqueSelection()
+        } else {
+            selectCritique(at: next)
+        }
+    }
+    
+    // MARK: - History navigation
+
+    /// Select a historical critique: restores the board position and all analysis
+    /// panel state from the stored snapshot. Fires LLM narrative if not yet ready.
+    func selectCritique(at index: Int) {
+        guard moveCritiques.indices.contains(index) else { return }
+        let critique = moveCritiques[index]
+        selectedCritiqueIndex = index
+        isReviewingHistory    = true
+
+        // Restore board to the position after this move
+        gameStore?.showPosition(fen: critique.fen)
+
+        // Restore all analysis panel state from the snapshot
+        let s = critique.snapshot
+        scoreCP                = critique.scoreAfter
+        wdl                    = s.wdl
+        lastFeedback           = s.feedback
+        currentPV              = s.pv
+        depth                  = s.depth
+        nodes                  = s.nodes
+        gamePhase              = s.gamePhase
+        currentCharacteristics = critique.characteristics
+        materialBalance        = s.materialBalance
+        mobilityWhite          = s.mobilityWhite
+        mobilityBlack          = s.mobilityBlack
+        nnue                   = s.nnue
+        pawnStructure          = s.pawnStructure
+        isolatedWhite          = s.isolatedWhite
+        isolatedBlack          = s.isolatedBlack
+        doubledWhite           = s.doubledWhite
+        doubledBlack           = s.doubledBlack
+        passedWhite            = s.passedWhite
+        passedBlack            = s.passedBlack
+        kingAttackersWhite     = s.kingAttackersWhite
+        kingAttackersBlack     = s.kingAttackersBlack
+        kingCastledWhite       = s.kingCastledWhite
+        kingCastledBlack       = s.kingCastledBlack
+        bestMoveArrows         = []
+
+        // Fire LLM narrative if not already available
+        requestNarrativeIfNeeded(for: critique)
+    }
+
+    /// Deselect any critique and return to the live game position.
+    func clearCritiqueSelection() {
+        selectedCritiqueIndex = nil
+        isReviewingHistory    = false
+        gameStore?.clearPositionOverride()
+
+        // Restore live panel state — clear to avoid showing stale historical data
+        clearLivePanel()
     }
 
     // MARK: - Private
@@ -185,6 +246,7 @@ final class AnalysisStore: ObservableObject {
     }
 
     func clearLivePanel() {
+        isReviewingHistory     = false
         lastFeedback           = ""
         bestMoveArrows         = []
         scoreCP                = nil
@@ -351,6 +413,32 @@ final class AnalysisStore: ObservableObject {
                 return max(0, loss)
             }()
 
+            let snapshot = PositionSnapshot(
+                scoreCP:            normScore,
+                scoreMate:          result.score_mate,
+                wdl:                result.wdl,
+                feedback:           result.feedback ?? "",
+                pv:                 result.pv ?? [],
+                depth:              result.depth,
+                nodes:              result.nodes,
+                gamePhase:          result.game_phase,
+                materialBalance:    result.material_balance,
+                mobilityWhite:      result.mobility_white,
+                mobilityBlack:      result.mobility_black,
+                nnue:               result.nnue,
+                pawnStructure:      result.pawn_structure,
+                isolatedWhite:      result.isolated_white,
+                isolatedBlack:      result.isolated_black,
+                doubledWhite:       result.doubled_white,
+                doubledBlack:       result.doubled_black,
+                passedWhite:        result.passed_white,
+                passedBlack:        result.passed_black,
+                kingAttackersWhite: result.king_attackers_white,
+                kingAttackersBlack: result.king_attackers_black,
+                kingCastledWhite:   result.king_castled_white,
+                kingCastledBlack:   result.king_castled_black
+            )
+
             let critique = MoveCritique(
                 moveNumber:      moveNumber,
                 side:            side,
@@ -363,7 +451,9 @@ final class AnalysisStore: ObservableObject {
                 comment:         classification.comment,
                 alternatives:    alternatives,
                 characteristics: result.characteristics,
-                suggestedLine:   result.pv ?? []
+                suggestedLine:   result.pv ?? [],
+                fen:             fen,
+                snapshot:        snapshot
             )
 
             moveCritiques.append(critique)

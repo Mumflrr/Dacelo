@@ -51,6 +51,39 @@ struct AlternativeMove: Codable, Identifiable {
     let pv: [String]
 }
 
+// MARK: - Position Snapshot
+//
+// Full analysis result captured at the time a move was analyzed
+// Stored on MoveCritique so navigating to a past move can fully restore the analysis panel without network round trip
+struct PositionSnapshot: Codable {
+    // Eval
+    let scoreCP: Int?
+    let scoreMate: Int?
+    let wdl: WDLResponse?
+    let feedback: String
+    let pv: [String]
+    let depth: Int?
+    let nodes: Int?
+    let gamePhase: String?
+    // python-chess
+    let materialBalance: Int?
+    let mobilityWhite: Int?
+    let mobilityBlack: Int?
+    // Analysis mode only - nil when analysed in play mode
+    let nnue: [String: NNUETerm]?
+    let pawnStructure: String?
+    let isolatedWhite: Int?
+    let isolatedBlack: Int?
+    let doubledWhite: Int?
+    let doubledBlack: Int?
+    let passedWhite: Int?
+    let passedBlack: Int?
+    let kingAttackersWhite: Int?
+    let kingAttackersBlack: Int?
+    let kingCastledWhite: Bool?
+    let kingCastledBlack: Bool?
+}
+
 // MARK: - Move Critique
 
 struct MoveCritique: Identifiable, Codable {
@@ -68,6 +101,8 @@ struct MoveCritique: Identifiable, Codable {
     let alternatives: [AlternativeMove]
     let characteristics: PositionCharacteristics?
     let suggestedLine: [String]
+    let fen: String
+    let snapshot: PositionSnapshot
 
     init(
         id: UUID = UUID(),
@@ -82,7 +117,9 @@ struct MoveCritique: Identifiable, Codable {
         comment: String,
         alternatives: [AlternativeMove],
         characteristics: PositionCharacteristics?,
-        suggestedLine: [String]
+        suggestedLine: [String],
+        fen: String,
+        snapshot: PositionSnapshot
     ) {
         self.id              = id
         self.moveNumber      = moveNumber
@@ -97,5 +134,7 @@ struct MoveCritique: Identifiable, Codable {
         self.alternatives    = alternatives
         self.characteristics = characteristics
         self.suggestedLine   = suggestedLine
+        self.fen             = fen
+        self.snapshot        = snapshot
     }
 }

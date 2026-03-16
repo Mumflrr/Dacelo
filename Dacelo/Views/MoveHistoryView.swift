@@ -53,20 +53,8 @@ struct MoveHistorySection: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                VStack(spacing: 8) {
-                    ForEach(critiques.reversed()) { critique in
-                        MoveCard(
-                            critique: critique,
-                            isSelected: selectedID == critique.id
-                        )
-                        .onTapGesture {
-                            withAnimation(.spring(response: 0.3)) {
-                                selectedID = selectedID == critique.id ? nil : critique.id
-                            }
-                        }
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                MoveHistoryList(critiques: critiques)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
@@ -96,6 +84,38 @@ struct MoveHistoryView: View {
     }
 }
 
+// MARK: MoveHistoryList.swift
+
+struct MoveHistoryList: View {
+    let critiques: [MoveCritique]
+    @EnvironmentObject var analysisStore: AnalysisStore
+    @EnvironmentObject var settings: AppSettings
+    
+    // Track selection locally for visual highlighting
+    @State private var selectedID: UUID? = nil
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(critiques.reversed()) { critique in
+                MoveCard(
+                    critique: critique,
+                    isSelected: selectedID == critique.id
+                )
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3)) {
+                        selectedID = selectedID == critique.id ? nil : critique.id
+                    }
+                    
+                    // The "Jump" logic handled in one place!
+                    if let index = critiques.firstIndex(where: { $0.id == critique.id }) {
+                        analysisStore.selectCritique(at: index)
+                    }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Move Card
 
 struct MoveCard: View {
@@ -115,7 +135,7 @@ struct MoveCard: View {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(critique.side == "white"
                               ? Color.white.opacity(0.92)
-                              : Color(white: 0.08))
+                              : Color(white: 0.3))
                     PieceSetPieceView(
                         pieceType: critique.pieceType,
                         side:      critique.side,
@@ -475,41 +495,5 @@ struct AlternativeLineRow: View {
         let to    = String(uci.dropFirst(2).prefix(2))
         let promo = uci.count > 4 ? "=\(uci.suffix(1).uppercased())" : ""
         return "\(from)→\(to)\(promo)"
-    }
-}
-
-#Preview {
-    NavigationStack {
-        ScrollView {
-            MoveHistorySection(critiques: [
-                MoveCritique(
-                    moveNumber: 1, side: "white", move: "e2e4", moveNotation: "1.",
-                    pieceType: "p",
-                    scoreBefore: nil, scoreAfter: 35, classification: .excellent,
-                    comment: "Best move! The engine agrees this is the top choice.",
-                    alternatives: [
-                        AlternativeMove(rank: 1, move: "d2d4", scoreCP: 28, scoreMate: nil,
-                                       pv: ["d2d4", "g8f6", "c2c4", "e7e6", "g1f3"]),
-                    ],
-                    characteristics: PositionCharacteristics(
-                        position_type:      "Unbalanced",
-                        precision_required: "Low",
-                        eval_stability:     "Stable",
-                        line_type:          "Flexible",
-                        explanation:        "There is a best move, but alternatives are reasonable. The best line is long and keeps many options open. Several moves maintain the position well."
-                    ),
-                    suggestedLine: ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"]
-                ),
-                MoveCritique(
-                    moveNumber: 1, side: "black", move: "e7e5", moveNotation: "1...",
-                    pieceType: "p",
-                    scoreBefore: 35, scoreAfter: 13, classification: .good,
-                    comment: "Good move — only 22cp from optimal.",
-                    alternatives: [], characteristics: nil, suggestedLine: []
-                )
-            ])
-            .padding()
-        }
-        .background(Color.black.opacity(0.9).ignoresSafeArea())
     }
 }

@@ -96,7 +96,16 @@ struct ReviewAnalysisPanel: View {
                 engineBrainIcon(analyzing: analysis.isAnalysing, isReview: true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Analysis Mode").font(.headline).foregroundStyle(.white)
-                    if analysis.isAnalysing { analysingLabel }
+                    if analysis.isAnalysing {
+                        analysingLabel
+                    } else if analysis.isReviewingHistory,
+                              let idx = analysis.selectedCritiqueIndex,
+                              analysis.moveCritiques.indices.contains(idx) {
+                        let c = analysis.moveCritiques[idx]
+                        Text("Reviewing  \(c.moveNotation)  \(formatUCIInline(c.move))")
+                            .font(.caption)
+                            .foregroundStyle(.purple.opacity(0.8))
+                    }
                 }
                 Spacer()
                 if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
@@ -560,4 +569,9 @@ func precisionColor(_ p: String) -> Color {
 }
 func lineTypeIcon(_ l: String) -> String {
     switch l { case "Forcing": return "bolt.circle.fill"; case "Tactical": return "scope"; case "Committal": return "arrow.right.circle.fill"; case "Flexible": return "arrow.triangle.branch"; default: return "tortoise.fill" }
+}
+
+private func formatUCIInline(_ uci: String) -> String {
+    guard uci.count >= 4 else { return uci }
+    return "\(uci.prefix(2))→\(uci.dropFirst(2).prefix(2))"
 }

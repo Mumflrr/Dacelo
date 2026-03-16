@@ -37,6 +37,8 @@ private enum DrawerSnap {
 struct MoveHistoryDrawer: View {
     let critiques:     [MoveCritique]
     let selectedIndex: Int?
+    
+    @EnvironmentObject var analysisStore: AnalysisStore
 
     // Committed snap position — only written on drag end/cancel or tap
     @State private var snapOffset: CGFloat = DrawerSnap.hidden
@@ -157,19 +159,11 @@ struct MoveHistoryDrawer: View {
     }
 
     // MARK: Card scroll
-
     private var cardScrollView: some View {
         ScrollView {
-            VStack(spacing: 8) {
-                ForEach(critiques.reversed()) { critique in
-                    let isSelected = selectedIndex.map {
-                        critiques.indices.contains($0) && critiques[$0].id == critique.id
-                    } ?? false
-                    MoveCard(critique: critique, isSelected: isSelected)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            MoveHistoryList(critiques: critiques)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
         }
         .frame(height: DrawerSnap.expandedHeight - DrawerSnap.headerHeight)
         .scrollDisabled(isDragging)

@@ -115,12 +115,3 @@ struct BoardArrowOverlay: View {
         ctx.fill(head, with: .color(color.opacity(opacity)))
     }
 }
-
-#Preview {
-    BoardArrowOverlay(arrows: [
-        (from: "e2", to: "e4"),
-        (from: "d2", to: "d4"),
-    ])
-    .frame(width: 400, height: 400)
-    .background(Color.gray.opacity(0.3))
-}

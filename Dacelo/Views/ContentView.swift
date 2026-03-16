@@ -28,10 +28,10 @@ struct ContentView: View {
 
     private var analysisStops: [Gradient.Stop] {
         [
-            .init(color: .black,                 location: 0.00),
-            .init(color: .indigo.opacity(0.35),  location: 0.35),
-            .init(color: .purple.opacity(0.45),  location: 0.85),
-            .init(color: .black.opacity(0.95),   location: 1.00)
+            .init(color: .black.opacity(0.45),    location: 0.25),
+            .init(color: .indigo.opacity(0.42),  location: 0.65),
+            .init(color: .purple.opacity(0.40),  location: 0.85),
+            .init(color: .black.opacity(0.90),   location: 0.99)
         ]
     }
 
@@ -143,10 +143,10 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
-                MoveNavigationBar()
-                    .environmentObject(analysis)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+//                MoveNavigationBar()
+//                    .environmentObject(analysis)
+//                    .padding(.horizontal, 12)
+//                    .padding(.vertical, 10)
                 Spacer()
             }
             .frame(width: 330)
@@ -200,9 +200,9 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 16)
 
-                    MoveNavigationBar()
-                        .environmentObject(analysis)
-                        .padding(.horizontal, 16)
+//                    MoveNavigationBar()
+//                        .environmentObject(analysis)
+//                        .padding(.horizontal, 16)
 
                     Color.clear.frame(height: 80)
                 }
@@ -225,7 +225,7 @@ struct ContentView: View {
             BoardLayout(boardTheme: game.boardTheme,
                             pieceSet:   settings.pieceSet,
                             isFlipped:  isFlipped)
-                .environmentObject(game.chessStore)
+                .environmentObject(game.displayChessStore)
                 .environmentObject(game)
             BoardArrowOverlay(arrows: analysis.bestMoveArrows)
         }
@@ -384,61 +384,61 @@ struct NewGameButton: View {
 }
 
 // MARK: - Move Navigation Bar
-
-struct MoveNavigationBar: View {
-    @EnvironmentObject var analysis: AnalysisStore
-
-    private var positionLabel: String {
-        guard !analysis.moveCritiques.isEmpty else { return "No moves yet" }
-        guard let idx = analysis.selectedCritiqueIndex else { return "Latest" }
-        let c = analysis.moveCritiques[idx]
-        let uciStr: String = {
-            let m = c.move
-            guard m.count >= 4 else { return c.moveNotation }
-            return "\(m.prefix(2))→\(m.dropFirst(2).prefix(2))"
-        }()
-        return "\(c.moveNotation) \(uciStr)"
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                withAnimation(.spring(response: 0.3)) { analysis.goBack() }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(.white.opacity(analysis.canGoBack ? 0.12 : 0.05)))
-                    .foregroundStyle(.white.opacity(analysis.canGoBack ? 0.9 : 0.3))
-            }
-            .buttonStyle(.plain)
-            .disabled(!analysis.canGoBack)
-
-            Spacer()
-
-            Text(positionLabel)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
-
-            Spacer()
-
-            Button {
-                withAnimation(.spring(response: 0.3)) { analysis.goForward() }
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(.white.opacity(analysis.canGoForward ? 0.12 : 0.05)))
-                    .foregroundStyle(.white.opacity(analysis.canGoForward ? 0.9 : 0.3))
-            }
-            .buttonStyle(.plain)
-            .disabled(!analysis.canGoForward)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial))
-    }
-}
+//
+//struct MoveNavigationBar: View {
+//    @EnvironmentObject var analysis: AnalysisStore
+//
+//    private var positionLabel: String {
+//        guard !analysis.moveCritiques.isEmpty else { return "No moves yet" }
+//        guard let idx = analysis.selectedCritiqueIndex else { return "Latest" }
+//        let c = analysis.moveCritiques[idx]
+//        let uciStr: String = {
+//            let m = c.move
+//            guard m.count >= 4 else { return c.moveNotation }
+//            return "\(m.prefix(2))→\(m.dropFirst(2).prefix(2))"
+//        }()
+//        return "\(c.moveNotation) \(uciStr)"
+//    }
+//
+//    var body: some View {
+//        HStack(spacing: 12) {
+//            Button {
+//                withAnimation(.spring(response: 0.3)) { analysis.goBack() }
+//            } label: {
+//                Image(systemName: "chevron.left")
+//                    .font(.system(size: 14, weight: .semibold))
+//                    .frame(width: 36, height: 36)
+//                    .background(Circle().fill(.white.opacity(analysis.canGoBack ? 0.12 : 0.05)))
+//                    .foregroundStyle(.white.opacity(analysis.canGoBack ? 0.9 : 0.3))
+//            }
+//            .buttonStyle(.plain)
+//            .disabled(!analysis.canGoBack)
+//
+//            Spacer()
+//
+//            Text(positionLabel)
+//                .font(.system(size: 13, weight: .medium, design: .monospaced))
+//                .foregroundStyle(.white.opacity(0.65))
+//                .lineLimit(1)
+//
+//            Spacer()
+//
+//            Button {
+//                withAnimation(.spring(response: 0.3)) { analysis.goForward() }
+//            } label: {
+//                Image(systemName: "chevron.right")
+//                    .font(.system(size: 14, weight: .semibold))
+//                    .frame(width: 36, height: 36)
+//                    .background(Circle().fill(.white.opacity(analysis.canGoForward ? 0.12 : 0.05)))
+//                    .foregroundStyle(.white.opacity(analysis.canGoForward ? 0.9 : 0.3))
+//            }
+//            .buttonStyle(.plain)
+//            .disabled(!analysis.canGoForward)
+//        }
+//        .padding(.horizontal, 8).padding(.vertical, 8)
+//        .background(RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial))
+//    }
+//}
 
 // MARK: - Rounded top corners shape
 
@@ -612,15 +612,15 @@ struct SettingsView: View {
             SettingsRow(label: "Pieces") {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
+                        Spacer(minLength: 0)
                         ForEach(PieceSet.allCases) { set in
                             PieceSetSwatch(pieceSet: set,
                                            isSelected: settings.pieceSet == set)
                                 .onTapGesture { settings.pieceSetName = set.rawValue }
                         }
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
                 }
-                .padding(.leading, 8)
             }
         }
     }
@@ -757,6 +757,18 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var connectionStatus: some View {
+        if app.engine.state.isConnected {
+            Label("Connected to \(settings.serverHost)", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        } else if let err = app.engine.state.lastError {
+            Label(err, systemImage: "exclamationmark.circle.fill")
+                .font(.caption).foregroundStyle(.red).lineLimit(2)
+        }
+    }
+    #endif
+
     /// Engine picker: shows a dropdown when the server has reported available engines,
     /// falls back to a text field if the list is empty (e.g. not yet connected).
     @ViewBuilder
@@ -784,18 +796,6 @@ struct SettingsView: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.08)))
         }
     }
-
-    @ViewBuilder
-    private var connectionStatus: some View {
-        if app.engine.state.isConnected {
-            Label("Connected to \(settings.serverHost)", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
-        } else if let err = app.engine.state.lastError {
-            Label(err, systemImage: "exclamationmark.circle.fill")
-                .font(.caption).foregroundStyle(.red).lineLimit(2)
-        }
-    }
-    #endif
 
     private var iOSSettings: some View {
         Form {
@@ -848,15 +848,15 @@ struct SettingsView: View {
                 LabeledContent("Pieces") {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
+                            Spacer(minLength: 0)
                             ForEach(PieceSet.allCases) { set in
                                 PieceSetSwatch(pieceSet: set,
                                                isSelected: settings.pieceSet == set)
                                     .onTapGesture { settings.pieceSetName = set.rawValue }
                             }
                         }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 4)
                     }
-                    .padding(.leading, 4)
                 }
             }
             Section("Analysis") {
@@ -1003,9 +1003,4 @@ struct SettingsRow<Content: View>: View {
             content
         }
     }
-}
-
-#Preview {
-    ContentView()
-        .environmentObject(AppStore())
 }

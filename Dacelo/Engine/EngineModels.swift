@@ -25,7 +25,7 @@ enum EngineError: LocalizedError {
 
 // MARK: - WDL
 
-struct WDLResponse: Decodable {
+struct WDLResponse: Codable {
     let white: Double
     let draw:  Double
     let black: Double
@@ -33,7 +33,7 @@ struct WDLResponse: Decodable {
 
 // MARK: - Wire responses
 
-struct NNUETerm: Decodable {
+struct NNUETerm: Codable {
     let white: Double
     let black: Double
     let total: Double
