@@ -15,6 +15,7 @@ struct ContentView: View {
     @EnvironmentObject var game:     GameStore
     @EnvironmentObject var analysis: AnalysisStore
     @EnvironmentObject var settings: AppSettings
+    @State private var showingInfo = false
 
     // 1. Define your two sets of gradient stops for morphing
     private var defaultStops: [Gradient.Stop] {
@@ -65,11 +66,18 @@ struct ContentView: View {
                     ConnectionToolbarItem()
                         .environmentObject(app.engine.state)
                         .environmentObject(app)
-                    
+
+                    Button {
+                        showingInfo = true
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                    }
+
                     Button {
                         withAnimation(.easeInOut(duration: 0.8)) {
                             if game.gameMode == .analysisOnly {
-                                app.newGame(mode: .humanVsEngine)
+                                app.exitAnalysisMode()
                             } else {
                                 app.enterAnalysisMode()
                             }
@@ -78,7 +86,7 @@ struct ContentView: View {
                         Image(systemName: "chart.xyaxis.line")
                             .foregroundStyle(game.gameMode == .analysisOnly ? .purple : .secondary)
                     }
-                    
+
                     NavigationLink {
                         SettingsView()
                             .environmentObject(app)
@@ -93,6 +101,9 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingInfo) {
+                    StatsInfoSheet(isAnalysisMode: game.gameMode == .analysisOnly)
+                }
         #if os(macOS)
         .frame(minWidth: 860, minHeight: 640)
         #endif
@@ -175,7 +186,6 @@ struct ContentView: View {
                         .shadow(color: game.boardTheme.dark.opacity(0.45), radius: 28, y: 8)
                         .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
                         .layoutPriority(1)
-
                     if let balance = analysis.materialBalance, balance != 0 {
                         MaterialBalanceView(balance: balance)
                     }

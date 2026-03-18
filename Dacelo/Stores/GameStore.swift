@@ -108,37 +108,29 @@ final class GameStore: ObservableObject {
     @Published var boardTheme:  BoardTheme  = .brown
     @Published var isPaused:    Bool        = false
     @Published var currentFEN:  String      = ""
-
     /// When non-nil the board shows this FEN instead of the live game position.
     /// Set by selectCritique() in AnalysisStore; cleared by clearPositionOverride().
     @Published var positionOverrideFEN: String? = nil
-
-    /// The FEN the board should display: override when reviewing history, live otherwise.
-    var displayFEN: String { positionOverrideFEN ?? currentFEN }
-
-    /// The ChessStore the board should render. When reviewing history this is a
-    /// static store loaded from the override FEN so no moves can be made.
-    var displayChessStore: ChessStore {
-        guard let fen = positionOverrideFEN else { return chessStore }
-
-        // Create a read-only game at the historical position.
-        // Both players are human so no robot fires; AnalysisStore observers
-        // are suppressed because we don't re-attach observe() on this store.
-        var game = Chess.Game(
-            Chess.HumanPlayer(side: .white),
-            against: Chess.HumanPlayer(side: .black)
-        )
-        
-        // Manually assign the board using the uppercase FEN: parameter
-        game.board = Chess.Board(FEN: fen)
-        
-        // Return the clean store (theme is handled automatically by the View)
-        return ChessStore(game: game)
-    }
-
+    /// A temporary, standalone game used for exploring alternate lines from a
+    /// historical position. Moves made here never enter moveCritiques.
+    /// Nil when not in scratch exploration mode.
+    @Published var scratchChessStore: ChessStore? = nil
     /// True while the user is in the middle of a two-tap manual move for Leela.
     /// Exposed so DaceloboardView can show a selection highlight on the first tap.
     @Published var manualSelectIdx: Int? = nil
+
+    /// The FEN the board should display: override when reviewing history, live otherwise.
+    var displayFEN: String { positionOverrideFEN ?? currentFEN }
+    /// True when the user is making moves in a historical scratch position.
+    var isExploringScratch: Bool { scratchChessStore != nil }
+    /// The ChessStore the board renders. Updated by showPosition(), clearPositionOverride(),
+    /// beginScratchExploration(), and endScratchExploration(). Always a stable reference
+    /// so SwiftUI's @EnvironmentObject injection stays consistent.
+    @Published var displayChessStore: ChessStore = ChessStore(game: Chess.Game(
+        Chess.HumanPlayer(side: .white),
+        against: Chess.HumanPlayer(side: .black)
+    ))
+
 
     // MARK: - Robot controller
     //
@@ -175,6 +167,7 @@ final class GameStore: ObservableObject {
         let store = ChessStore(game: Chess.Game(white, against: black))
         applyTheme(to: store)
         chessStore = store
+        displayChessStore = store
         currentFEN = store.game.board.FEN
 
         cancellables.removeAll()
@@ -248,11 +241,21 @@ final class GameStore: ObservableObject {
     /// The board becomes read-only while an override is active — no moves accepted.
     func showPosition(fen: String) {
         positionOverrideFEN = fen
+        var game = Chess.Game(
+            Chess.HumanPlayer(side: .white),
+            against: Chess.HumanPlayer(side: .black)
+        )
+        game.board = Chess.Board(FEN: fen)
+        let readOnly = ChessStore(game: game)
+        applyTheme(to: readOnly)
+        displayChessStore = readOnly
     }
 
     /// Return to the live game position, clearing any history override.
     func clearPositionOverride() {
         positionOverrideFEN = nil
+        scratchChessStore   = nil
+        displayChessStore   = chessStore
     }
 
     // MARK: - Helpers
@@ -265,6 +268,31 @@ final class GameStore: ObservableObject {
         let activeColor  = String(parts[1])
         let leelaIsBlack = playerColor == .white
         return leelaIsBlack ? activeColor == "b" : activeColor == "w"
+    }
+    
+    /// Load a scratch game from a FEN so the user can explore freely.
+    func beginScratchExploration(from fen: String) {
+        var game = Chess.Game(
+            Chess.HumanPlayer(side: .white),
+            against: Chess.HumanPlayer(side: .black)
+        )
+        game.board = Chess.Board(FEN: fen)
+        let store = ChessStore(game: game)
+        applyTheme(to: store)
+        store.gameAction(.startGame)
+        scratchChessStore  = store
+        displayChessStore  = store
+    }
+    
+    /// Disregard scratch game
+    func endScratchExploration() {
+        scratchChessStore = nil
+        // Return to the read-only history view if still reviewing, else live game
+        if let fen = positionOverrideFEN {
+            showPosition(fen: fen)   // rebuilds the read-only store into displayChessStore
+        } else {
+            displayChessStore = chessStore
+        }
     }
 
     // MARK: - Private

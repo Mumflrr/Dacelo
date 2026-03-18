@@ -46,6 +46,7 @@ final class AppStore: ObservableObject {
         self.analysis    = ana
 
         ana.observe(game, settings: s)
+        ana.observeScratch(game)
     }
 
     // MARK: - Connection
@@ -113,5 +114,15 @@ final class AppStore: ObservableObject {
         gameStore.gameMode = .analysisOnly
         analysis.observe(gameStore, settings: settings, preserveHistory: true)
         analysis.fillMissingNarratives()
+    }
+    
+    /// Return to humanVsEngine from analysis mode WITHOUT resetting the game.
+    func exitAnalysisMode() {
+        gameStore.gameMode = .humanVsEngine
+        gameStore.clearPositionOverride()
+        analysis.clearCritiqueSelection()
+        // Re-observe so the engine robot (if any) resumes normally.
+        // preserveHistory: true keeps all the critiques visible.
+        analysis.observe(gameStore, settings: settings, preserveHistory: true)
     }
 }

@@ -23,6 +23,13 @@ struct BoardLayout: View {
     @State private var squareSize: CGFloat         = 0
     @State private var isDropping: Bool            = false
     
+    /// Always returns the store that should receive game actions right now.
+    /// Reads directly from gameStore (always current) rather than the injected
+    /// `store` EnvironmentObject which can be one render cycle behind.
+    private var activeStore: ChessStore {
+        gameStore.displayChessStore
+    }
+    
     init(boardTheme: BoardTheme, pieceSet: PieceSet, isFlipped: Bool) {
             self.boardTheme = boardTheme
             self.pieceSet = pieceSet
@@ -86,13 +93,21 @@ struct BoardLayout: View {
                 DragGesture(minimumDistance: 6, coordinateSpace: .local)
                     .onChanged { value in
                         if draggingFromVisualIdx == nil {
+                            // Bootstrap scratch at drag START so both userDragged and
+                            // userDropped go to the same store in the same gesture.
+                            if gameStore.positionOverrideFEN != nil && !gameStore.isExploringScratch {
+                                guard let fen = gameStore.positionOverrideFEN else { return }
+                                gameStore.beginScratchExploration(from: fen)
+                            }
+
+                            let target = activeStore
                             guard
                                 let vIdx  = squareVisualIdx(at: value.startLocation, sqSz: sqSz),
-                                let piece = store.game.board.squares[Chess.Position(boardIdx(vIdx))].piece,
+                                let piece = target.game.board.squares[Chess.Position(boardIdx(vIdx))].piece,
                                 canDragPiece(piece, at: boardIdx(vIdx))
                             else { return }
                             draggingFromVisualIdx = vIdx
-                            store.gameAction(.userDragged(position: boardIdx(vIdx)))
+                            target.gameAction(.userDragged(position: boardIdx(vIdx)))
                         }
                         guard let fromVisual = draggingFromVisualIdx else { return }
                         let center = squareCenter(visualIdx: fromVisual, sqSz: sqSz)
@@ -103,8 +118,7 @@ struct BoardLayout: View {
                     }
                     .onEnded { value in
                         guard let fromVisual = draggingFromVisualIdx else { return }
-                        // Do NOT clear draggingFromVisualIdx here — let FEN onChange handle it
-                        // so the ghost stays visible until the board has actually updated.
+                        let target = activeStore
 
                         if let toVisual = squareVisualIdx(at: value.location, sqSz: sqSz) {
                             let to = boardIdx(toVisual)
@@ -115,27 +129,24 @@ struct BoardLayout: View {
                                 robotController?.submitManualMove(from: boardIdx(fromVisual), to: to)
                             } else {
                                 isDropping = true
-                                store.gameAction(.userDropped(position: to))
-                                
-                                let fenBefore = store.game.board.FEN
+                                target.gameAction(.userDropped(position: to))
+
+                                let fenBefore = target.game.board.FEN
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    if store.game.board.FEN == fenBefore {
-                                        // Move was rejected — restore state
+                                    if target.game.board.FEN == fenBefore {
                                         draggingFromVisualIdx = nil
                                         dragOffset = .zero
                                         isDropping = false
                                     }
                                 }
-                            
                             }
                         } else {
-                            // Dropped off board — clear immediately since FEN won't change
                             draggingFromVisualIdx = nil
                             dragOffset = .zero
                         }
                     }
             )
-            .onChange(of: store.game.board.FEN) { _, _ in
+            .onChange(of: gameStore.scratchChessStore?.game.board.FEN) { _, _ in
                 withAnimation(.easeOut(duration: 0.08)) {
                     draggingFromVisualIdx = nil
                     dragOffset            = .zero
@@ -148,14 +159,24 @@ struct BoardLayout: View {
     }
 
     // MARK: - Tap handling
-
     private func handleTap(boardIdx bIdx: Int) {
         if gameStore.isPaused && gameStore.isRobotsTurn() {
-            // Route tap into the manual-move sequence for Leela.
             gameStore.handleManualTap(boardIdx: bIdx)
-        } else {
-            store.gameAction(.userTappedSquare(position: bIdx))
+            return
         }
+
+        // If reviewing history (with or without scratch already active),
+        // bootstrap scratch if needed then always route to it directly.
+        if gameStore.positionOverrideFEN != nil {
+            if !gameStore.isExploringScratch {
+                guard let fen = gameStore.positionOverrideFEN else { return }
+                gameStore.beginScratchExploration(from: fen)
+            }
+            gameStore.scratchChessStore?.gameAction(.userTappedSquare(position: bIdx))
+            return
+        }
+
+        store.gameAction(.userTappedSquare(position: bIdx))
     }
 
     // MARK: - Drag permission
@@ -180,7 +201,7 @@ struct BoardLayout: View {
     // MARK: - Active-side guard
 
     private func pieceMatchesActiveSide(_ piece: Chess.Piece) -> Bool {
-        let parts = store.game.board.FEN.split(separator: " ")
+        let parts = activeStore.game.board.FEN.split(separator: " ")
         guard parts.count > 1 else { return true }
         switch String(parts[1]) {
         case "w": return piece.side == .white

@@ -155,6 +155,7 @@ final class AnalysisStore: ObservableObject {
     private weak var gameStore:    GameStore?
     private weak var appSettings:  AppSettings?
     private var cancellables: Set<AnyCancellable> = []
+    private var scratchCancellables: Set<AnyCancellable> = []
 
     private var prevEval:  Int? = nil
     private var moveCount: Int  = 0
@@ -168,6 +169,22 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Public API
 
+    // Call this ONCE from AppStore.init(), never again
+    func observeScratch(_ gameStore: GameStore) {
+        gameStore.$scratchChessStore
+            .compactMap { $0 }
+            .flatMap { $0.$game }
+            .removeDuplicates { $0.board.FEN == $1.board.FEN }
+            .dropFirst()
+            .sink { [weak self] game in
+                DispatchQueue.main.async {
+                    self?.handlePositionChange(game, appendToHistory: false)
+                }
+            }
+            .store(in: &scratchCancellables)  // separate cancellable set, never cleared
+    }
+
+    // observe() goes back to ONLY the main store subscription — exactly as it was before our changes
     func observe(_ gameStore: GameStore, settings: AppSettings? = nil, preserveHistory: Bool = false) {
         self.gameStore   = gameStore
         self.appSettings = settings
@@ -180,7 +197,7 @@ final class AnalysisStore: ObservableObject {
             .dropFirst()
             .sink { [weak self] game in
                 DispatchQueue.main.async {
-                    self?.handlePositionChange(game)
+                    self?.handlePositionChange(game, appendToHistory: true)
                 }
             }
             .store(in: &cancellables)
@@ -190,8 +207,16 @@ final class AnalysisStore: ObservableObject {
 
     /// Show hint arrows for the top `count` moves (1–3).
     func requestHint(count: Int = 1) {
-        guard let fen = gameStore?.currentFEN, !fen.isEmpty else { return }
-        guard !isRequestingHint else { return }
+        let fen: String
+        if let scratchFEN = gameStore?.scratchChessStore?.game.board.FEN {
+            fen = scratchFEN
+        } else if let overrideFEN = gameStore?.positionOverrideFEN {
+            fen = overrideFEN
+        } else {
+            guard let liveFEN = gameStore?.currentFEN, !liveFEN.isEmpty else { return }
+            fen = liveFEN
+        }
+        guard !fen.isEmpty, !isRequestingHint else { return }
         let clampedCount = max(1, min(count, 3))
         isRequestingHint = true
         Task {
@@ -277,7 +302,7 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Position change handler
 
-    private func handlePositionChange(_ game: Chess.Game) {
+    private func handlePositionChange(_ game: Chess.Game, appendToHistory: Bool) {
         let fen = game.board.FEN
         guard !fen.hasPrefix("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR") else { return }
 
@@ -328,29 +353,24 @@ final class AnalysisStore: ObservableObject {
             }
         }()
 
-        moveCount += 1
-        let capturedMoveCount  = moveCount
+        let capturedMoveCount  = appendToHistory ? { moveCount += 1; return moveCount }() : moveCount
         let capturedPrevEval   = prevEval
         let capturedPieceType  = pieceType
         let isAnalysisMode     = gameStore?.gameMode == .analysisOnly
-
-        // Capture the NNUE engine name now (on MainActor) before entering the Task.
-        // In analysis mode the server runs this engine concurrently with the primary
-        // eval engine and merges the NNUE breakdown into the response.
-        // In regular play mode this is "" — EngineService won't send nnue_engine at all.
         let capturedNNUEEngine = isAnalysisMode ? (appSettings?.nnueEngine ?? "stockfish") : ""
 
         enqueue {
             await self.runMoveAnalysis(
-                fen:            fen,
-                side:           sideJustMoved,
-                movePrefix:     movePrefix,
-                lastUCI:        lastUCI,
-                pieceType:      capturedPieceType,
-                moveNumber:     capturedMoveCount,
-                prevEval:       capturedPrevEval,
-                isAnalysisMode: isAnalysisMode,
-                nnueEngine:     capturedNNUEEngine
+                fen:             fen,
+                side:            sideJustMoved,
+                movePrefix:      movePrefix,
+                lastUCI:         lastUCI,
+                pieceType:       capturedPieceType,
+                moveNumber:      capturedMoveCount,
+                prevEval:        capturedPrevEval,
+                isAnalysisMode:  isAnalysisMode,
+                nnueEngine:      capturedNNUEEngine,
+                appendToHistory: appendToHistory
             )
         }
     }
@@ -358,16 +378,18 @@ final class AnalysisStore: ObservableObject {
     // MARK: - Analysis
 
     private func runMoveAnalysis(
-        fen:            String,
-        side:           String,
-        movePrefix:     String,
-        lastUCI:        String,
-        pieceType:      String,
-        moveNumber:     Int,
-        prevEval:       Int?,
-        isAnalysisMode: Bool,
-        nnueEngine:     String
+        fen:             String,
+        side:            String,
+        movePrefix:      String,
+        lastUCI:         String,
+        pieceType:       String,
+        moveNumber:      Int,
+        prevEval:        Int?,
+        isAnalysisMode:  Bool,
+        nnueEngine:      String,
+        appendToHistory: Bool
     ) async {
+        
         isAnalysing = true
         defer { isAnalysing = false }
 
@@ -456,11 +478,8 @@ final class AnalysisStore: ObservableObject {
                 snapshot:        snapshot
             )
 
-            moveCritiques.append(critique)
-
             self.prevEval               = normScore
             self.scoreCP                = normScore
-            // FIX: was never set — now populated from the raw engine score
             self.engineScoreCP          = result.score_cp
             self.wdl                    = result.wdl
             self.materialBalance        = result.material_balance
@@ -468,16 +487,25 @@ final class AnalysisStore: ObservableObject {
             self.mobilityBlack          = result.mobility_black
             self.depth                  = result.depth
             self.nodes                  = result.nodes
-            // FIX: was result.deep_score_cp — field didn't exist on AnalysisResponse
-            // → compile error. Now defined in EngineModels.swift.
             self.deepScoreCP            = result.deep_score_cp
             self.nnue                   = result.nnue
             self.lastFeedback           = result.feedback ?? ""
             self.currentCharacteristics = result.characteristics
             self.currentPV              = result.pv ?? []
+            self.gamePhase              = result.game_phase
+            self.isolatedWhite          = result.isolated_white
+            self.isolatedBlack          = result.isolated_black
+            self.doubledWhite           = result.doubled_white
+            self.doubledBlack           = result.doubled_black
+            self.passedWhite            = result.passed_white
+            self.passedBlack            = result.passed_black
+            self.pawnStructure          = result.pawn_structure
+            self.kingAttackersWhite     = result.king_attackers_white
+            self.kingAttackersBlack     = result.king_attackers_black
+            self.kingCastledWhite       = result.king_castled_white
+            self.kingCastledBlack       = result.king_castled_black
 
-            // Populate arrows: analysis mode shows top 3 alternatives;
-            // play mode clears arrows after each move.
+            
             if isAnalysisMode {
                 var arrows: [(from: String, to: String)] = []
                 if let from = result.from, let to = result.to, !from.isEmpty, !to.isEmpty {
@@ -492,73 +520,59 @@ final class AnalysisStore: ObservableObject {
             } else {
                 self.bestMoveArrows = []
             }
-            self.gamePhase              = result.game_phase
-            // Pawn structure and king safety only populated in analysis mode
-            self.isolatedWhite          = result.isolated_white
-            self.isolatedBlack          = result.isolated_black
-            self.doubledWhite           = result.doubled_white
-            self.doubledBlack           = result.doubled_black
-            self.passedWhite            = result.passed_white
-            self.passedBlack            = result.passed_black
-            self.pawnStructure          = result.pawn_structure
-            self.kingAttackersWhite     = result.king_attackers_white
-            self.kingAttackersBlack     = result.king_attackers_black
-            self.kingCastledWhite       = result.king_castled_white
-            self.kingCastledBlack       = result.king_castled_black
 
-            // Build LLM context for every move in analysis mode.
-            // Do NOT fire the LLM call here — store the context and fire lazily
-            // when the user navigates to this move in post-game review.
-            // This avoids LLM latency during analysis and keeps responses
-            // tied to the specific move the user is looking at.
-            if isAnalysisMode {
-                let nnueTermCtx: (String) -> NNUETermContext? = { key in
-                    guard let term = result.nnue?[key] else { return nil }
-                    return NNUETermContext(white: term.white, black: term.black, total: term.total)
+            // Only record history for real game moves, never scratch
+            if appendToHistory {
+                moveCritiques.append(critique)
+                self.prevEval = normScore
+
+                if isAnalysisMode {
+                    let nnueTermCtx: (String) -> NNUETermContext? = { key in
+                        guard let term = result.nnue?[key] else { return nil }
+                        return NNUETermContext(white: term.white, black: term.black, total: term.total)
+                    }
+                    let ctx = LLMAnalysisContext(
+                        fen:                fen,
+                        movePlayed:         lastUCI,
+                        side:               side,
+                        moveNotation:       movePrefix,
+                        wdl:                result.wdl.map {
+                            WDLContext(white: $0.white, draw: $0.draw, black: $0.black)
+                        },
+                        scoreCP:            normScore,
+                        pvLine:             result.pv ?? [],
+                        materialBalance:    result.material_balance ?? 0,
+                        mobilityWhite:      result.mobility_white ?? 0,
+                        mobilityBlack:      result.mobility_black ?? 0,
+                        moveClassification: classification.quality.rawValue,
+                        cpLoss:             cpLoss,
+                        positionType:       result.characteristics?.position_type      ?? "Equal",
+                        precisionRequired:  result.characteristics?.precision_required ?? "Low",
+                        evalStability:      result.characteristics?.eval_stability      ?? "Stable",
+                        lineType:           result.characteristics?.line_type           ?? "Quiet",
+                        alternatives:       alternatives.map {
+                            LLMAlternative(move: $0.move, scoreCP: $0.scoreCP)
+                        },
+                        depth:              result.depth,
+                        nodes:              result.nodes,
+                        gamePhase:          result.game_phase,
+                        pawnStructure:      result.pawn_structure,
+                        passedWhite:        result.passed_white,
+                        passedBlack:        result.passed_black,
+                        isolatedWhite:      result.isolated_white,
+                        isolatedBlack:      result.isolated_black,
+                        kingAttackersWhite: result.king_attackers_white,
+                        kingAttackersBlack: result.king_attackers_black,
+                        kingCastledWhite:   result.king_castled_white,
+                        kingCastledBlack:   result.king_castled_black,
+                        nnueKingSafety:     nnueTermCtx("king_safety"),
+                        nnueMobility:       nnueTermCtx("mobility"),
+                        nnueThreats:        nnueTermCtx("threats"),
+                        nnuePassedPawns:    nnueTermCtx("passed_pawns")
+                    )
+                    llmContexts[critique.id] = ctx
+                    LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
                 }
-                let ctx = LLMAnalysisContext(
-                    fen:                fen,
-                    movePlayed:         lastUCI,
-                    side:               side,
-                    moveNotation:       movePrefix,
-                    wdl:                result.wdl.map {
-                        WDLContext(white: $0.white, draw: $0.draw, black: $0.black)
-                    },
-                    scoreCP:            normScore,
-                    pvLine:             result.pv ?? [],
-                    materialBalance:    result.material_balance ?? 0,
-                    mobilityWhite:      result.mobility_white ?? 0,
-                    mobilityBlack:      result.mobility_black ?? 0,
-                    moveClassification: classification.quality.rawValue,
-                    cpLoss:             cpLoss,
-                    positionType:       result.characteristics?.position_type      ?? "Equal",
-                    precisionRequired:  result.characteristics?.precision_required ?? "Low",
-                    evalStability:      result.characteristics?.eval_stability      ?? "Stable",
-                    lineType:           result.characteristics?.line_type           ?? "Quiet",
-                    alternatives:       alternatives.map {
-                        LLMAlternative(move: $0.move, scoreCP: $0.scoreCP)
-                    },
-                    depth:              result.depth,
-                    nodes:              result.nodes,
-                    gamePhase:          result.game_phase,
-                    pawnStructure:      result.pawn_structure,
-                    passedWhite:        result.passed_white,
-                    passedBlack:        result.passed_black,
-                    isolatedWhite:      result.isolated_white,
-                    isolatedBlack:      result.isolated_black,
-                    kingAttackersWhite: result.king_attackers_white,
-                    kingAttackersBlack: result.king_attackers_black,
-                    kingCastledWhite:   result.king_castled_white,
-                    kingCastledBlack:   result.king_castled_black,
-                    nnueKingSafety:     nnueTermCtx("king_safety"),
-                    nnueMobility:       nnueTermCtx("mobility"),
-                    nnueThreats:        nnueTermCtx("threats"),
-                    nnuePassedPawns:    nnueTermCtx("passed_pawns")
-                )
-                llmContexts[critique.id] = ctx
-                // Fire immediately — narrative is stored silently during play
-                // and only displayed when the user enters review mode.
-                LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
             }
 
         } catch {

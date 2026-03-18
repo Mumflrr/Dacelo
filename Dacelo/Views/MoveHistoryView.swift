@@ -102,12 +102,14 @@ struct MoveHistoryList: View {
                     isSelected: selectedID == critique.id
                 )
                 .onTapGesture {
+                    let isDeselecting = selectedID == critique.id
                     withAnimation(.spring(response: 0.3)) {
-                        selectedID = selectedID == critique.id ? nil : critique.id
+                        selectedID = isDeselecting ? nil : critique.id
                     }
-                    
-                    // The "Jump" logic handled in one place!
-                    if let index = critiques.firstIndex(where: { $0.id == critique.id }) {
+
+                    if isDeselecting {
+                        analysisStore.clearCritiqueSelection()
+                    } else if let index = critiques.firstIndex(where: { $0.id == critique.id }) {
                         analysisStore.selectCritique(at: index)
                     }
                 }

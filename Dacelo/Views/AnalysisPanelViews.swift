@@ -38,6 +38,7 @@ import SwiftUI
 struct AnalysisPanel: View {
     @EnvironmentObject var analysis: AnalysisStore
     @EnvironmentObject var game:     GameStore
+    @State private var showingInfo = false
     @State private var isExpanded = true
 
     var body: some View {
@@ -574,4 +575,135 @@ func lineTypeIcon(_ l: String) -> String {
 private func formatUCIInline(_ uci: String) -> String {
     guard uci.count >= 4 else { return uci }
     return "\(uci.prefix(2))→\(uci.dropFirst(2).prefix(2))"
+}
+
+
+// MARK: - Stats Info Sheet
+
+struct StatsInfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let isAnalysisMode: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                // Header
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Understanding the Stats")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(.white)
+                        Text(isAnalysisMode ? "Analysis Mode" : "Play Mode")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(isAnalysisMode ? .purple : .blue)
+                    }
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 4)
+
+                InfoSection(title: "Evaluation", icon: "plusminus.circle.fill", color: .green, entries: [
+                    ("Score (pawns)", "Positive = White advantage, negative = Black advantage. +1.00 means roughly one pawn ahead. Above ±3 is usually decisive."),
+                    ("WDL Bar", "Win/Draw/Loss probability from the engine's perspective. White % on the left, Black % on the right."),
+                ])
+
+                InfoSection(title: "Move Quality", icon: "star.circle.fill", color: .yellow, entries: [
+                    ("Excellent / Best", "Within 10cp of the engine's top choice."),
+                    ("Good", "10–25cp below optimal. Solid play."),
+                    ("Inaccuracy", "25–50cp lost. A better option was available."),
+                    ("Mistake", "50–100cp lost. Significantly weakens your position."),
+                    ("Blunder", "100cp+ lost. Changes the game's outcome."),
+                ])
+
+                InfoSection(title: "Position Badges", icon: "tag.fill", color: .blue, entries: [
+                    ("Eval Stability", "Stable = engine score unlikely to swing. Fluctuating = position is double-edged. Sharp = small mistakes have big consequences."),
+                    ("Position Type", "Equal / Unbalanced / Complex / Critical — describes the character of the position."),
+                    ("Line Type", "Quiet / Flexible / Tactical / Forcing / Committal — describes the nature of the best continuation."),
+                    ("Precision Required", "How accurately you need to play to maintain your advantage."),
+                ])
+
+                InfoSection(title: "Mobility", icon: "arrow.up.and.down.and.arrow.left.and.right", color: .cyan, entries: [
+                    ("Mobility Bar", "Number of legal moves available to each side. More mobility = more active pieces and better coordination."),
+                ])
+
+                if isAnalysisMode {
+                    InfoSection(title: "NNUE Breakdown", icon: "chart.bar.fill", color: .purple, entries: [
+                        ("Material", "Raw piece count difference weighted by standard values."),
+                        ("Imbalance", "Non-material advantages like bishop pair or rook on open file."),
+                        ("Pawns", "Pawn structure evaluation: passed pawns, chains, weaknesses."),
+                        ("Mobility", "Piece activity score from the neural network."),
+                        ("King Safety", "Exposure and shelter around each king."),
+                        ("Threats", "Immediate tactical threats on both sides."),
+                        ("Passed Pawns", "Bonus for pawns with a clear path to promotion."),
+                        ("Space", "Territory control in the centre and on flanks."),
+                    ])
+
+                    InfoSection(title: "Pawn Structure", icon: "square.grid.3x3.fill", color: .orange, entries: [
+                        ("Isolated", "Pawns with no friendly pawns on adjacent files. Hard to defend."),
+                        ("Doubled", "Two pawns on the same file. Usually a long-term weakness."),
+                        ("Passed", "Pawns with no opposing pawns blocking or attacking their path to promotion."),
+                    ])
+
+                    InfoSection(title: "King Safety", icon: "shield.fill", color: .red, entries: [
+                        ("Attackers", "Number of enemy pieces actively targeting the king zone."),
+                        ("Castled", "Whether the king has castled. Uncastled kings in open positions are dangerous."),
+                    ])
+                }
+            }
+            .padding(20)
+        }
+        .contentMargins(.trailing, 8, for: .scrollIndicators)
+        .contentMargins(.vertical, 10, for: .scrollIndicators)
+                
+        .scrollIndicatorsFlash(onAppear: true)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 20)
+                    .strokeBorder(.white.opacity(0.1), lineWidth: 1))
+        )
+        .presentationDetents([.medium, .large])
+        .presentationBackground(.black.opacity(0.85))
+    }
+}
+
+private struct InfoSection: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let entries: [(String, String)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(entries, id: \.0) { term, definition in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(term)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text(definition)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.05)))
+                }
+            }
+        }
+    }
 }
