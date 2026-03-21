@@ -21,6 +21,7 @@
 			membershipExceptions = (
 				Assets.xcassets,
 				Chess/ChessBoard.swift,
+				Chess/ChessClock.swift,
 				Chess/ChessGame.swift,
 				Chess/ChessMoveGenerator.swift,
 				Chess/ChessRobot.swift,
@@ -39,6 +40,7 @@
 				Views/BoardArrowOverlay.swift,
 				Views/BoardLayout.swift,
 				Views/ContentView.swift,
+				Views/MacMoveHistoryDrawer.swift,
 				Views/MoveHistoryDrawer.swift,
 				Views/MoveHistoryView.swift,
 				Views/PieceSetTheme.swift,

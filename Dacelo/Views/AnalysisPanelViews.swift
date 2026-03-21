@@ -42,17 +42,25 @@ struct AnalysisPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 engineBrainIcon(analyzing: analysis.isAnalysing, isReview: false)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Engine Analysis").font(.headline).foregroundStyle(.white)
-                    if analysis.isAnalysing {
-                        analysingLabel(stage: analysis.analysisStage)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Engine Analysis")
+                        .font(.headline).foregroundStyle(.white)
+                    // Reserved-height slot — always occupies space so header never jumps.
+                    ZStack(alignment: .leading) {
+                        Text("Engine thinking…").font(.caption).hidden()
+                        if analysis.isAnalysing {
+                            analysingLabel(stage: analysis.analysisStage)
+                        }
                     }
                 }
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
-                    if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
+                    ZStack {
+                        ModernEvalBadge(scoreCP: 0).hidden()
+                        if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
+                    }
                     expandToggle($isExpanded)
                 }
             }
@@ -101,20 +109,26 @@ struct ReviewAnalysisPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 engineBrainIcon(analyzing: analysis.isAnalysing, isReview: true)
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("Analysis Mode").font(.headline).foregroundStyle(.white)
-                    if analysis.isAnalysing { analysingLabel(stage: analysis.analysisStage)
-                    } else if analysis.isReviewingHistory,
-                              let idx = analysis.selectedCritiqueIndex,
-                              analysis.moveCritiques.indices.contains(idx) {
-                        let c = analysis.moveCritiques[idx]
-                        Text("Reviewing  \(c.moveNotation)  \(formatUCIInline(c.move))")
-                            .font(.caption)
-                            .foregroundStyle(.purple.opacity(0.8))
+                    ZStack(alignment: .leading) {
+                        Text("Engine thinking…").font(.caption).hidden()
+                        if analysis.isAnalysing {
+                            analysingLabel(stage: analysis.analysisStage)
+                        } else if analysis.isReviewingHistory,
+                                  let idx = analysis.selectedCritiqueIndex,
+                                  analysis.moveCritiques.indices.contains(idx) {
+                            let c = analysis.moveCritiques[idx]
+                            Text("Reviewing  \(c.moveNotation)  \(formatUCIInline(c.move))")
+                                .font(.caption).foregroundStyle(.purple.opacity(0.8))
+                        }
                     }
                 }
                 Spacer()
-                if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
+                ZStack {
+                    ModernEvalBadge(scoreCP: 0).hidden()
+                    if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
+                }
                 expandToggle($isExpanded)
             }
             if isExpanded {
@@ -339,37 +353,105 @@ struct KingSafetyView: View {
 struct LLMNarrativeView: View {
     let critiqueID: UUID
     @ObservedObject private var llm = LLMHookService.shared
-    private var narrative: String? { llm.narrative(for: critiqueID) }
-    private var loading: Bool      { llm.isGenerating(for: critiqueID) }
+
+    private var output: ChessCoachingOutput? { llm.narrative(for: critiqueID) }
+    private var loading: Bool { llm.isGenerating(for: critiqueID) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Header row
             HStack(spacing: 6) {
-                Image(systemName:"text.bubble.fill").font(.caption2.weight(.semibold)).foregroundStyle(.purple)
-                Text("AI Commentary").font(.caption.weight(.semibold)).foregroundStyle(.purple)
+                Image(systemName: "text.bubble.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.purple)
+                Text("AI Commentary")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.purple)
                 Spacer()
-                if loading { ProgressView().controlSize(.mini).tint(.purple) }
-                else if !llm.isAvailable { Text("LLM offline").font(.caption2).foregroundStyle(.white.opacity(0.3)) }
+                if loading {
+                    PulsingDot(color: .purple)
+                } else if !llm.isAvailable {
+                    Text("LLM offline")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.3))
+                }
             }
+
             if loading {
-                HStack(spacing:5) {
+                // Three-dot loading animation
+                HStack(spacing: 5) {
                     ForEach(0..<3) { i in
-                        Circle().fill(Color.purple.opacity(0.6)).frame(width:6,height:6)
+                        Circle()
+                            .fill(Color.purple.opacity(0.6))
+                            .frame(width: 6, height: 6)
                             .scaleEffect(loading ? 1.0 : 0.5)
-                            .animation(.easeInOut(duration:0.5).repeatForever().delay(Double(i)*0.15), value:loading)
+                            .animation(
+                                .easeInOut(duration: 0.5)
+                                .repeatForever()
+                                .delay(Double(i) * 0.15),
+                                value: loading
+                            )
                     }
-                }.padding(.vertical,4)
-            } else if let t = narrative {
-                Text(t).font(.subheadline).foregroundStyle(.white.opacity(0.88))
-                    .fixedSize(horizontal:false,vertical:true).lineSpacing(2)
-                    .transition(.opacity).animation(.easeInOut(duration:0.35),value:t)
+                }
+                .padding(.vertical, 4)
+
+            } else if let out = output {
+                // Tactical pattern badge
+                let pattern = out.pattern
+                HStack(spacing: 5) {
+                    Image(systemName: pattern.icon)
+                        .font(.caption2.weight(.bold))
+                    Text(pattern.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(pattern.color)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(pattern.color.opacity(0.15)))
+                .overlay(Capsule().strokeBorder(pattern.color.opacity(0.4), lineWidth: 1))
+
+                // Headline — most prominent
+                Text(out.headline)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Explanation — body
+                if !out.explanation.isEmpty {
+                    Text(out.explanation)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.78))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(2)
+                }
+
+                // Suggestion — only shown when suboptimal
+                if let suggestion = out.suggestion, !suggestion.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "lightbulb.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow.opacity(0.8))
+                            .padding(.top, 2)
+                        Text(suggestion)
+                            .font(.subheadline)
+                            .foregroundStyle(.yellow.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .lineSpacing(2)
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(.yellow.opacity(0.06)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.yellow.opacity(0.2), lineWidth: 1))
+                }
             } else if llm.isAvailable {
-                Text("Commentary not yet available.").font(.subheadline).foregroundStyle(.white.opacity(0.35))
+                Text("Commentary not yet available.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.35))
             }
         }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.35), value: output?.headline)
         .padding(12)
-        .background(RoundedRectangle(cornerRadius:12).fill(Color.purple.opacity(0.07)))
-        .overlay(RoundedRectangle(cornerRadius:12).strokeBorder(Color.purple.opacity(0.25),lineWidth:1))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.purple.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.purple.opacity(0.25), lineWidth: 1))
     }
 }
 
@@ -426,26 +508,73 @@ struct MobilityBar: View {
     }
 }
 
+// ── Captured Pieces ───────────────────────────────────────────────────────
+
+struct CapturedPiecesView: View {
+    let whiteCaptured: [PieceType]  // white pieces taken by black
+    let blackCaptured: [PieceType]  // black pieces taken by white
+    @EnvironmentObject var settings: AppSettings
+
+    private func typeCode(_ t: PieceType) -> String {
+        switch t {
+        case .queen:  return "q"
+        case .rook:   return "r"
+        case .bishop: return "b"
+        case .knight: return "n"
+        case .pawn:   return "p"
+        case .king:   return "k"
+        }
+    }
+
+    var body: some View {
+        if whiteCaptured.isEmpty && blackCaptured.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                // Black pieces taken by white — show as black pieces
+                if !blackCaptured.isEmpty {
+                    pieceRow(blackCaptured, side: "black")
+                }
+                // White pieces taken by black — show as white pieces
+                if !whiteCaptured.isEmpty {
+                    pieceRow(whiteCaptured, side: "white")
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(.black.opacity(0.45))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    @ViewBuilder
+    private func pieceRow(_ types: [PieceType], side: String) -> some View {
+        HStack(spacing: 1) {
+            ForEach(Array(types.enumerated()), id: \.offset) { _, type in
+                PieceSetPieceView(
+                    pieceType: typeCode(type),
+                    side:      side,
+                    pieceSet:  settings.pieceSet
+                )
+                .frame(width: 18, height: 18)
+            }
+        }
+    }
+}
+
 // ── Material Balance ──────────────────────────────────────────────────────
 
 struct MaterialBalanceView: View {
     let balance: Int
-    var body: some View { if balance != 0 { row } }
-    private var row: some View {
-        HStack(spacing:6) {
-            if balance > 0 {
-                Text("♙ ×\(balance)").font(.system(size:13,weight:.semibold)).foregroundStyle(.white.opacity(0.85))
-                Text("+\(balance)").font(.system(size:12,weight:.bold,design:.monospaced)).foregroundStyle(.green)
-            } else {
-                Text("♟ ×\(abs(balance))").font(.system(size:13,weight:.semibold)).foregroundStyle(.white.opacity(0.85))
-                Text("\(balance)").font(.system(size:12,weight:.bold,design:.monospaced)).foregroundStyle(.red)
-            }
+
+    var body: some View {
+        if balance != 0 {
+            Text(balance > 0 ? "+\(balance)" : "\(balance)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .padding(.horizontal, 5).padding(.vertical, 3)
+                .background(.black.opacity(0.35))
+                .clipShape(Capsule())
         }
-        .padding(.horizontal,10).padding(.vertical,5)
-        .background(Capsule().fill(.ultraThinMaterial).shadow(color:.black.opacity(0.2),radius:4,y:2))
-        .overlay(Capsule().strokeBorder(.white.opacity(0.1),lineWidth:1))
-        .transition(.opacity.combined(with:.scale(scale:0.9)))
-        .animation(.spring(response:0.3),value:balance)
     }
 }
 
@@ -510,22 +639,19 @@ private extension View {
     let color: Color = isReview ? .purple : .blue
     ZStack {
         Circle()
-            .fill(color.opacity(0.2))
+            .fill(color.opacity(analyzing ? 0.45 : 0.2))
             .frame(width: 40, height: 40)
-        Circle()
-            .fill(color.opacity(analyzing ? 0.25 : 0))
-            .frame(width: 40, height: 40)
-            .scaleEffect(analyzing ? 1.5 : 1.0)
             .animation(
                 analyzing
-                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                    : .easeInOut(duration: 0.2),
+                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                    : .easeInOut(duration: 0.3),
                 value: analyzing
             )
         Image(systemName: isReview ? "chart.xyaxis.line" : "brain.head.profile")
             .font(.title3)
             .foregroundStyle(color.gradient)
     }
+    .frame(width: 40, height: 40)
 }
 
 @ViewBuilder private func analysingLabel(stage: AnalysisStore.AnalysisStage) -> some View {
@@ -538,18 +664,32 @@ private extension View {
     }
 }
 
-private struct PulsingDot: View {
+struct PulsingDot: View {
     let color: Color
-    @State private var pulse = false
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 7, height: 7)
-            .shadow(color: color.opacity(pulse ? 0.9 : 0), radius: pulse ? 5 : 2)
-            .animation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true), value: pulse)
-            .onAppear { pulse = true }
-            .onDisappear { pulse = false }
+            .modifier(PulseModifier(color: color))
+    }
+}
+
+private struct PulseModifier: ViewModifier {
+    let color: Color
+    @State private var on = false
+
+    func body(content: Content) -> some View {
+        content
+            .shadow(color: color.opacity(on ? 0.9 : 0), radius: on ? 5 : 2)
+            .onAppear {
+                // Small delay ensures the view is fully laid out before animating
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
+                        on = true
+                    }
+                }
+            }
     }
 }
 
@@ -575,7 +715,7 @@ private func analysingText(for stage: AnalysisStore.AnalysisStage) -> String {
         .font(.subheadline)
         .foregroundStyle(text.isEmpty ? .white.opacity(0.5) : .white.opacity(0.9))
         .fixedSize(horizontal:false,vertical:true)
-        .animation(.easeInOut,value:text)
+        .animation(.easeInOut(duration: 0.005), value: text)
 }
 
 @ViewBuilder func sectionLabel(_ title: String, icon: String, color: Color) -> some View {

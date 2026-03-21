@@ -81,17 +81,31 @@ final class AnalysisStore: ObservableObject {
     @Published var kingCastledWhite:      Bool?                        = nil
     @Published var kingCastledBlack:      Bool?                        = nil
 
-    var canGoBack:    Bool { !moveCritiques.isEmpty && (selectedCritiqueIndex ?? moveCritiques.count - 1) > 0 }
-    var canGoForward: Bool { selectedCritiqueIndex != nil && selectedCritiqueIndex! < moveCritiques.count - 1 }
+    var canGoBack: Bool {
+        if gameStore?.isExploringScratch == true { return gameStore?.canGoBackInScratch ?? false }
+        return !moveCritiques.isEmpty && (selectedCritiqueIndex ?? moveCritiques.count - 1) > 0
+    }
+    var canGoForward: Bool {
+        if gameStore?.isExploringScratch == true { return gameStore?.canGoForwardInScratch ?? false }
+        return selectedCritiqueIndex != nil && selectedCritiqueIndex! < moveCritiques.count - 1
+    }
     var isAnalysing: Bool { analysisStage != .idle }
 
     func goBack() {
+        if gameStore?.isExploringScratch == true {
+            gameStore?.goBackInHistory()
+            return
+        }
         guard !moveCritiques.isEmpty else { return }
         let current = selectedCritiqueIndex ?? (moveCritiques.count - 1)
         selectCritique(at: max(0, current - 1))
     }
 
     func goForward() {
+        if gameStore?.isExploringScratch == true {
+            gameStore?.goForwardInScratch()
+            return
+        }
         guard let idx = selectedCritiqueIndex else { return }
         let next = idx + 1
         if next >= moveCritiques.count {
@@ -111,11 +125,29 @@ final class AnalysisStore: ObservableObject {
         selectedCritiqueIndex = index
         isReviewingHistory    = true
 
+        // Save live panel state the first time we enter history so we can restore it
+        if livePanelSnapshot == nil {
+            livePanelSnapshot = PositionSnapshot(
+                scoreCP: scoreCP, scoreMate: nil, wdl: wdl,
+                feedback: lastFeedback, pv: currentPV,
+                depth: depth, nodes: nodes, gamePhase: gamePhase,
+                materialBalance: materialBalance,
+                mobilityWhite: mobilityWhite, mobilityBlack: mobilityBlack,
+                nnue: nnue, pawnStructure: pawnStructure,
+                isolatedWhite: isolatedWhite, isolatedBlack: isolatedBlack,
+                doubledWhite: doubledWhite, doubledBlack: doubledBlack,
+                passedWhite: passedWhite, passedBlack: passedBlack,
+                kingAttackersWhite: kingAttackersWhite,
+                kingAttackersBlack: kingAttackersBlack,
+                kingCastledWhite: kingCastledWhite,
+                kingCastledBlack: kingCastledBlack
+            )
+        }
+
         // Tear down any existing scratch before showing the new position.
         gameStore?.endScratchExploration()
         gameStore?.showHistoryPosition(fen: critique.fen)
 
-        // Restore all analysis panel state from the snapshot
         let s = critique.snapshot
         scoreCP                = critique.scoreAfter
         wdl                    = s.wdl
@@ -143,14 +175,46 @@ final class AnalysisStore: ObservableObject {
         bestMoveArrows         = []
 
         requestNarrativeIfNeeded(for: critique)
+        prevEval = critique.scoreAfter
     }
 
     /// Deselect any critique and return to the live game position.
-    func clearCritiqueSelection() {
+    func clearCritiqueSelection(preservePanelState: Bool = false) {
         selectedCritiqueIndex = nil
         isReviewingHistory    = false
         gameStore?.clearHistoryReview()
-        clearLivePanel()
+        if preservePanelState {
+            return
+        }
+        // Restore live state if we snapshotted it; otherwise clear
+        if let snap = livePanelSnapshot {
+            scoreCP                = snap.scoreCP
+            wdl                    = snap.wdl
+            lastFeedback           = snap.feedback
+            currentPV              = snap.pv
+            depth                  = snap.depth
+            nodes                  = snap.nodes
+            gamePhase              = snap.gamePhase
+            materialBalance        = snap.materialBalance
+            mobilityWhite          = snap.mobilityWhite
+            mobilityBlack          = snap.mobilityBlack
+            nnue                   = snap.nnue
+            pawnStructure          = snap.pawnStructure
+            isolatedWhite          = snap.isolatedWhite
+            isolatedBlack          = snap.isolatedBlack
+            doubledWhite           = snap.doubledWhite
+            doubledBlack           = snap.doubledBlack
+            passedWhite            = snap.passedWhite
+            passedBlack            = snap.passedBlack
+            kingAttackersWhite     = snap.kingAttackersWhite
+            kingAttackersBlack     = snap.kingAttackersBlack
+            kingCastledWhite       = snap.kingCastledWhite
+            kingCastledBlack       = snap.kingCastledBlack
+            bestMoveArrows         = []
+            livePanelSnapshot      = nil
+        } else {
+            clearLivePanel()
+        }
     }
 
     // MARK: - Private
@@ -164,6 +228,10 @@ final class AnalysisStore: ObservableObject {
     private var prevEval:  Int? = nil
     private var moveCount: Int  = 0
     private var tail: Task<Void, Never>?
+
+    // Snapshot of live panel state saved when user enters history review,
+    // so we can restore it when they return to the live position.
+    private var livePanelSnapshot: PositionSnapshot?
 
     // MARK: - Init
 
@@ -237,6 +305,7 @@ final class AnalysisStore: ObservableObject {
         moveCritiques.removeAll()
         llmContexts.removeAll()
         selectedCritiqueIndex = nil
+        livePanelSnapshot     = nil
         prevEval  = nil
         moveCount = 0
         clearLivePanel()
@@ -250,18 +319,6 @@ final class AnalysisStore: ObservableObject {
     func requestNarrativeIfNeeded(for critique: MoveCritique) {
         guard let ctx = llmContexts[critique.id] else { return }
         LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
-    }
-
-    /// Fill any missing narratives — call on entering review mode to catch
-    /// moves where the LLM was offline or failed during play.
-    func fillMissingNarratives() {
-        let pairs = moveCritiques.compactMap { critique -> (UUID, LLMAnalysisContext)? in
-            guard let ctx = llmContexts[critique.id] else { return nil }
-            return (critique.id, ctx)
-        }
-        LLMHookService.shared.fillMissingNarratives(
-            critiques: pairs.map { (id: $0.0, context: $0.1) }
-        )
     }
 
     func clearLivePanel() {
@@ -499,48 +556,17 @@ final class AnalysisStore: ObservableObject {
                 self.prevEval = normScore
 
                 if isAnalysisMode {
-                    let nnueTermCtx: (String) -> NNUETermContext? = { key in
-                        guard let term = result.nnue?[key] else { return nil }
-                        return NNUETermContext(white: term.white, black: term.black, total: term.total)
-                    }
-                    let ctx = LLMAnalysisContext(
-                        fen:                fen,
-                        movePlayed:         lastUCI,
-                        side:               side,
-                        moveNotation:       movePrefix,
-                        wdl:                result.wdl.map {
-                            WDLContext(white: $0.white, draw: $0.draw, black: $0.black)
-                        },
-                        scoreCP:            normScore,
-                        pvLine:             result.pv ?? [],
-                        materialBalance:    result.material_balance ?? 0,
-                        mobilityWhite:      result.mobility_white ?? 0,
-                        mobilityBlack:      result.mobility_black ?? 0,
-                        moveClassification: classification.quality.rawValue,
-                        cpLoss:             cpLoss,
-                        positionType:       result.characteristics?.position_type      ?? "Equal",
-                        precisionRequired:  result.characteristics?.precision_required ?? "Low",
-                        evalStability:      result.characteristics?.eval_stability      ?? "Stable",
-                        lineType:           result.characteristics?.line_type           ?? "Quiet",
-                        alternatives:       alternatives.map {
-                            LLMAlternative(move: $0.move, scoreCP: $0.scoreCP)
-                        },
-                        depth:              result.depth,
-                        nodes:              result.nodes,
-                        gamePhase:          result.game_phase,
-                        pawnStructure:      result.pawn_structure,
-                        passedWhite:        result.passed_white,
-                        passedBlack:        result.passed_black,
-                        isolatedWhite:      result.isolated_white,
-                        isolatedBlack:      result.isolated_black,
-                        kingAttackersWhite: result.king_attackers_white,
-                        kingAttackersBlack: result.king_attackers_black,
-                        kingCastledWhite:   result.king_castled_white,
-                        kingCastledBlack:   result.king_castled_black,
-                        nnueKingSafety:     nnueTermCtx("king_safety"),
-                        nnueMobility:       nnueTermCtx("mobility"),
-                        nnueThreats:        nnueTermCtx("threats"),
-                        nnuePassedPawns:    nnueTermCtx("passed_pawns")
+                    let ctx = buildCoachingRequest(
+                        fen:          fen,
+                        lastUCI:      lastUCI,
+                        side:         side,
+                        movePrefix:   movePrefix,
+                        result:       result,
+                        normScore:    normScore,
+                        prevEvalSnap: prevEval,
+                        cpLoss:       cpLoss,
+                        classification: classification.quality.rawValue,
+                        alternatives: alternatives
                     )
                     llmContexts[critique.id] = ctx
                     LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
@@ -607,6 +633,128 @@ final class AnalysisStore: ObservableObject {
             return (.blunder,
                     String(format: "Blunder — %.2f pawns lost!\(betterStr) This fundamentally changes the game's outcome.", lostPawns))
         }
+    }
+
+    /// Fill any missing narratives — call on entering review mode to catch
+    /// any that failed during play (e.g. LLM was offline).
+    func fillMissingNarratives() {
+        let pairs: [(id: UUID, context: ChessCoachingRequest)] = moveCritiques.compactMap { c in
+            guard let ctx = llmContexts[c.id] else { return nil }
+            return (id: c.id, context: ctx)
+        }
+        LLMHookService.shared.fillMissingNarratives(critiques: pairs)
+    }
+
+    // MARK: - Coaching request builder
+
+    /// Builds a pre-digested ChessCoachingRequest from raw analysis data.
+    /// Raw numbers (NNUE floats, mobility counts, isolated pawn counts) are
+    /// converted to human-readable tactical flags here.
+    private func buildCoachingRequest(
+        fen:            String,
+        lastUCI:        String,
+        side:           String,
+        movePrefix:     String,
+        result:         AnalysisResponse,
+        normScore:      Int?,
+        prevEvalSnap:   Int?,
+        cpLoss:         Int?,
+        classification: String,
+        alternatives:   [AlternativeMove]
+    ) -> ChessCoachingRequest {
+
+        // ── Best alternative ──────────────────────────────────────────────
+        let bestAlt      = alternatives.first
+        let bestMoveUCI  = bestAlt?.move != lastUCI ? bestAlt?.move : nil
+        let bestMoveEval = bestAlt?.scoreCP.map { Double($0) / 100.0 }
+
+        // ── Eval ──────────────────────────────────────────────────────────
+        let evalAfter = normScore.map { Double($0) / 100.0 }
+
+        // ── Depth drift profile ───────────────────────────────────────────
+        // Derived from shallow (score_cp) vs deep (deep_score_cp).
+        // Tells the LLM whether this move looks better or worse at depth.
+        let depthProfile: String? = {
+            guard let shallow = result.score_cp,
+                  let deep    = result.deep_score_cp else { return nil }
+            let drift = deep - shallow
+            switch drift {
+            case  60...:   return "deepening"   // score improves at depth
+            case ..<(-60): return "mirage"      // collapses — hidden refutation
+            case -20...20: return "stable"      // consistent at all depths
+            default:       return "sharp"       // oscillating
+            }
+        }()
+
+        // ── Tactical flags (pre-digested) ─────────────────────────────────
+        // Each flag is a plain English sentence.
+        var flags: [String] = []
+
+        let wAtk = result.king_attackers_white ?? 0
+        let bAtk = result.king_attackers_black ?? 0
+        let wCas = result.king_castled_white ?? true
+        let bCas = result.king_castled_black ?? true
+
+        if !wCas && wAtk >= 2 {
+            flags.append("White king is uncastled and under heavy attack (\(wAtk) pieces in zone)")
+        } else if !wCas {
+            flags.append("White king has not castled")
+        }
+        if !bCas && bAtk >= 2 {
+            flags.append("Black king is uncastled and under heavy attack (\(bAtk) pieces in zone)")
+        } else if !bCas {
+            flags.append("Black king has not castled")
+        }
+
+        if let pw = result.passed_white, pw > 0 {
+            flags.append("White has \(pw) passed pawn\(pw > 1 ? "s" : "")")
+        }
+        if let pb = result.passed_black, pb > 0 {
+            flags.append("Black has \(pb) passed pawn\(pb > 1 ? "s" : "")")
+        }
+        if let iw = result.isolated_white, iw >= 2 {
+            flags.append("White has \(iw) isolated pawns (structural weakness)")
+        }
+        if let ib = result.isolated_black, ib >= 2 {
+            flags.append("Black has \(ib) isolated pawns (structural weakness)")
+        }
+
+        let mat = result.material_balance ?? 0
+        if abs(mat) >= 3 {
+            flags.append("\(mat > 0 ? "White" : "Black") is up \(abs(mat)) pawn equivalents in material")
+        }
+
+        // ── PV in algebraic (strip raw UCI for the LLM) ───────────────────
+        // Keep as UCI — the LLM handles "e2→e4" style after uci() in the prompt.
+        let bestLine = Array((result.pv ?? []).prefix(4))
+
+        // ── Slow mode detection ───────────────────────────────────────────
+        // Fire slow mode for: blunders, mirage moves, sacrifices (material loss
+        // that the engine still considers roughly equal or better).
+        let isBlunder    = (cpLoss ?? 0) > 150
+        let isMirage     = depthProfile == "mirage"
+        let isSacrifice  = (cpLoss ?? 0) > 200 && (normScore ?? 0) > -50
+        let isSlowMode   = isBlunder || isMirage || isSacrifice
+
+        return ChessCoachingRequest(
+            movePlayed:    lastUCI,
+            side:          side,
+            moveNotation:  movePrefix,
+            classification: classification,
+            cpLoss:        cpLoss,
+            evalAfter:     evalAfter,
+            winPctWhite:   result.wdl.map { Int(($0.white * 100).rounded()) },
+            winPctDraw:    result.wdl.map { Int(($0.draw  * 100).rounded()) },
+            winPctBlack:   result.wdl.map { Int(($0.black * 100).rounded()) },
+            gamePhase:     result.game_phase,
+            materialDelta: mat,
+            bestMove:      bestMoveUCI,
+            bestMoveEval:  bestMoveEval,
+            bestLine:      bestLine,
+            depthProfile:  depthProfile,
+            tacticalFlags: flags,
+            isSlowMode:    isSlowMode
+        )
     }
 
     private func formatUCI(_ uci: String) -> String {

@@ -38,9 +38,8 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
-                
-                // 2. Use the computed stops and add the animation modifier
+                // Gradient is the sole background — no opaque Color.black fill
+                // so macOS 26's rounded window corners are respected.
                 LinearGradient(
                     stops: game.gameMode == .analysisOnly ? analysisStops : defaultStops,
                     startPoint: .topLeading,
@@ -48,7 +47,7 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
                 .animation(.easeInOut(duration: 0.8), value: game.gameMode)
-                
+
                 #if os(macOS)
                 macOSLayout
                 #else
@@ -104,7 +103,7 @@ struct ContentView: View {
                     StatsInfoSheet(isAnalysisMode: game.gameMode == .analysisOnly)
                 }
         #if os(macOS)
-        .frame(minWidth: 860, minHeight: 640)
+        .frame(minWidth: 980, minHeight: 640)
         #endif
     }
 
@@ -112,64 +111,112 @@ struct ContentView: View {
 
     #if os(macOS)
     private var macOSLayout: some View {
-        HStack(alignment: .top, spacing: 0) {
-            VStack(spacing: 4) {
-                GeometryReader { geo in
-                    let side = min(geo.size.width, geo.size.height)
+        GeometryReader { geo in
+            // Board size: fill available height minus padding and control bar,
+            // but also respect available width. Cap at 700px.
+            let padding:     CGFloat = 16
+            let controlBar:  CGFloat = 44
+            let spacing:     CGFloat = 32
+            let rightPanel:  CGFloat = 340
+            let maxBoard:    CGFloat = 900
+            let fromHeight = geo.size.height - padding * 2 - controlBar - 8
+            let fromWidth  = geo.size.width  - padding * 2 - spacing - rightPanel
+            let boardSize  = min(min(fromHeight, fromWidth), maxBoard)
+
+            HStack(alignment: .top, spacing: spacing) {
+                // ── Left: board + controls ────────────────────
+                VStack(alignment: .leading, spacing: 8) {
                     boardWithArrows
-                        .frame(width: side, height: side)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(width: boardSize, height: boardSize)
                         .shadow(color: game.boardTheme.dark.opacity(0.45), radius: 28, y: 8)
                         .shadow(color: .black.opacity(0.5), radius: 16, y: 10)
-                        .fixedSize()
+
+                    boardControlRow
+                        .frame(width: boardSize)
                 }
 
-                if let balance = analysis.materialBalance, balance != 0 {
-                    MaterialBalanceView(balance: balance)
-                        .padding(.horizontal, 16)
-                }
-
-                BoardControlBar()
-                    .environmentObject(app)
-                    .environmentObject(game)
-                    .environmentObject(analysis)
-                    .environmentObject(settings)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
-            .padding(16)
-
-            VStack(spacing: 0) {
-                Group {
-                    if game.gameMode == .analysisOnly {
-                        ReviewAnalysisPanel()
-                            .environmentObject(analysis)
-                            .environmentObject(game)
-                    } else {
-                        AnalysisPanel()
-                            .environmentObject(analysis)
-                            .environmentObject(game)
+                // ── Right: analysis panel + history drawer ────
+                VStack(spacing: 0) {
+                    // Analysis panel (intrinsic height)
+                    Group {
+                        if game.gameMode == .analysisOnly {
+                            ReviewAnalysisPanel()
+                                .environmentObject(analysis)
+                                .environmentObject(game)
+                        } else {
+                            AnalysisPanel()
+                                .environmentObject(analysis)
+                                .environmentObject(game)
+                        }
                     }
+                    .padding(.top, 4)
+
+                    // History drawer slides down immediately below.
+                    // Clamp to a safe minimum so frame dimensions are never negative.
+                    let drawerAvailable = max(100, geo.size.height - padding * 2 - 200)
+                    MacMoveHistoryDrawer(
+                        critiques:       analysis.moveCritiques,
+                        selectedIndex:   analysis.selectedCritiqueIndex,
+                        availableHeight: drawerAvailable
+                    )
+                    .environmentObject(analysis)
+                    .padding(.top, 8)
+
+                    Spacer()
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-//                MoveNavigationBar()
-//                    .environmentObject(analysis)
-//                    .padding(.horizontal, 12)
-//                    .padding(.vertical, 10)
+                .frame(width: rightPanel)
+
                 Spacer()
             }
-            .frame(width: 330)
-            .padding(.trailing, 8)
-            .overlay(alignment: .bottom) {
-                MoveHistoryDrawer(
-                    critiques:     analysis.moveCritiques,
-                    selectedIndex: analysis.selectedCritiqueIndex
-                )
-                .padding(.trailing, 8)
+            .padding(padding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    @MainActor private var boardControlRow: some View {
+        let captured   = game.capturedPieces
+        let showClock  = !settings.timeControl.isUnlimited
+        return HStack(spacing: 8) {
+            // ── Left: action buttons ──────────────────────────
+            if game.gameMode == .humanVsEngine { pauseButton }
+            if game.gameMode == .analysisOnly  { newGameButton }
+            hintButton
+            navButtons
+
+            Spacer()
+
+            // ── Centre-right: captured pieces ────────────────
+            if !captured.white.isEmpty || !captured.black.isEmpty {
+                HStack(spacing: 6) {
+                    CapturedPiecesView(
+                        whiteCaptured: captured.white,
+                        blackCaptured: captured.black
+                    )
+                    .environmentObject(settings)
+                    if let balance = analysis.materialBalance, balance != 0 {
+                        MaterialBalanceView(balance: balance)
+                    }
+                }
+            }
+
+            // ── Right: clock ──────────────────────────────────
+            if showClock {
+                HStack(spacing: 6) {
+                    ClockDisplayView(
+                        time:     game.clock.whiteTime,
+                        side:     .white,
+                        isActive: game.clock.activeSide == .white && game.clock.isRunning,
+                        flagged:  game.clock.flagged == .white
+                    )
+                    ClockDisplayView(
+                        time:     game.clock.blackTime,
+                        side:     .black,
+                        isActive: game.clock.activeSide == .black && game.clock.isRunning,
+                        flagged:  game.clock.flagged == .black
+                    )
+                }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     #endif
 
@@ -185,9 +232,6 @@ struct ContentView: View {
                         .shadow(color: game.boardTheme.dark.opacity(0.45), radius: 28, y: 8)
                         .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
                         .layoutPriority(1)
-                    if let balance = analysis.materialBalance, balance != 0 {
-                        MaterialBalanceView(balance: balance)
-                    }
 
                     BoardControlBar()
                         .environmentObject(app)
@@ -229,6 +273,66 @@ struct ContentView: View {
         game.gameMode == .humanVsEngine && game.playerColor == .black
     }
 
+    @ViewBuilder private var pauseButton: some View {
+        Button { game.togglePause() } label: {
+            Label(
+                game.isPaused ? "Resume" : "Pause",
+                systemImage: game.isPaused ? "play.fill" : "pause.fill"
+            )
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(game.isPaused ? .green : .orange)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Capsule().fill((game.isPaused ? Color.green : Color.orange).opacity(0.15)))
+            .overlay(Capsule().strokeBorder((game.isPaused ? Color.green : Color.orange).opacity(0.4), lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var newGameButton: some View {
+        Button { app.newGame() } label: {
+            Label("New Game", systemImage: "arrow.counterclockwise")
+                .font(.caption.weight(.semibold)).foregroundStyle(.purple)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Capsule().fill(Color.purple.opacity(0.15)))
+                .overlay(Capsule().strokeBorder(Color.purple.opacity(0.4), lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var hintButton: some View {
+        Button { analysis.requestHint(count: settings.hintCount) } label: {
+            HStack(spacing: 5) {
+                if analysis.isRequestingHint { PulsingDot(color: .blue) }
+                else { Image(systemName: "lightbulb.fill") }
+                Text("Hint").font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.blue)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Capsule().fill(Color.blue.opacity(0.15)))
+            .overlay(Capsule().strokeBorder(Color.blue.opacity(0.4), lineWidth: 1))
+        }.buttonStyle(.plain).disabled(analysis.isRequestingHint)
+    }
+
+    @ViewBuilder private var navButtons: some View {
+        HStack(spacing: 2) {
+            Button { withAnimation(.spring(response: 0.25)) { analysis.goBack() } } label: {
+                Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(.white.opacity(analysis.canGoBack ? 0.1 : 0.04)))
+                    .foregroundStyle(.white.opacity(analysis.canGoBack ? 0.85 : 0.2))
+            }
+            .buttonStyle(.plain).disabled(!analysis.canGoBack)
+            .keyboardShortcut(.leftArrow, modifiers: [])
+
+            Button { withAnimation(.spring(response: 0.25)) { analysis.goForward() } } label: {
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(.white.opacity(analysis.canGoForward ? 0.1 : 0.04)))
+                    .foregroundStyle(.white.opacity(analysis.canGoForward ? 0.85 : 0.2))
+            }
+            .buttonStyle(.plain).disabled(!analysis.canGoForward)
+            .keyboardShortcut(.rightArrow, modifiers: [])
+        }
+    }
+
     private var boardWithArrows: some View {
         ZStack {
             BoardLayout(boardTheme: game.boardTheme,
@@ -252,7 +356,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Board Control Bar
+// MARK: - Board Control Bar (iOS)
 
 struct BoardControlBar: View {
     @EnvironmentObject var app:      AppStore
@@ -263,9 +367,8 @@ struct BoardControlBar: View {
     private var engineDisplayName: String {
         settings.bestMoveEngine.isEmpty ? "Engine" : settings.bestMoveEngine.capitalized
     }
-
     private var pauseButtonLabel: String {
-        game.isPaused ? "Resume \(engineDisplayName)" : "Take \(engineDisplayName)'s Turn"
+        game.isPaused ? "Resume" : "Pause"
     }
 
     var body: some View {
@@ -273,49 +376,47 @@ struct BoardControlBar: View {
             if game.gameMode == .humanVsEngine {
                 Button { game.togglePause() } label: {
                     Label(pauseButtonLabel, systemImage: game.isPaused ? "play.fill" : "pause.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(game.isPaused ? .green : .orange)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Capsule().fill(
-                        (game.isPaused ? Color.green : Color.orange).opacity(0.15)
-                    ))
-                    .overlay(Capsule().strokeBorder(
-                        (game.isPaused ? Color.green : Color.orange).opacity(0.4),
-                        lineWidth: 1
-                    ))
-                }
-                .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(game.isPaused ? .green : .orange)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Capsule().fill((game.isPaused ? Color.green : Color.orange).opacity(0.15)))
+                        .overlay(Capsule().strokeBorder((game.isPaused ? Color.green : Color.orange).opacity(0.4), lineWidth: 1))
+                }.buttonStyle(.plain)
             }
-
             if game.gameMode == .analysisOnly {
                 Button { app.newGame() } label: {
                     Label("New Game", systemImage: "arrow.counterclockwise")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.purple)
+                        .font(.caption.weight(.semibold)).foregroundStyle(.purple)
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(Capsule().fill(Color.purple.opacity(0.15)))
                         .overlay(Capsule().strokeBorder(Color.purple.opacity(0.4), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+                }.buttonStyle(.plain)
             }
-
             Button { analysis.requestHint(count: settings.hintCount) } label: {
                 HStack(spacing: 5) {
-                    if analysis.isRequestingHint {
-                        ProgressView().controlSize(.mini).tint(.blue)
-                    } else {
-                        Image(systemName: "lightbulb.fill")
-                    }
+                    if analysis.isRequestingHint { PulsingDot(color: .blue) }
+                    else { Image(systemName: "lightbulb.fill") }
                     Text("Hint").font(.caption.weight(.semibold))
                 }
                 .foregroundStyle(.blue)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Capsule().fill(Color.blue.opacity(0.15)))
                 .overlay(Capsule().strokeBorder(Color.blue.opacity(0.4), lineWidth: 1))
+            }.buttonStyle(.plain).disabled(analysis.isRequestingHint)
+            HStack(spacing: 2) {
+                Button { withAnimation(.spring(response: 0.25)) { analysis.goBack() } } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(.white.opacity(analysis.canGoBack ? 0.1 : 0.04)))
+                        .foregroundStyle(.white.opacity(analysis.canGoBack ? 0.85 : 0.2))
+                }.buttonStyle(.plain).disabled(!analysis.canGoBack)
+                Button { withAnimation(.spring(response: 0.25)) { analysis.goForward() } } label: {
+                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(.white.opacity(analysis.canGoForward ? 0.1 : 0.04)))
+                        .foregroundStyle(.white.opacity(analysis.canGoForward ? 0.85 : 0.2))
+                }.buttonStyle(.plain).disabled(!analysis.canGoForward)
             }
-            .buttonStyle(.plain)
-            .disabled(analysis.isRequestingHint)
-
             Spacer()
         }
     }
@@ -607,6 +708,16 @@ struct SettingsView: View {
                 }
             }
             Divider().background(.white.opacity(0.1))
+            SettingsRow(label: "Time control") {
+                Picker("", selection: $settings.timeControlIndex) {
+                    ForEach(TimeControl.presets.indices, id: \.self) { i in
+                        Text(TimeControl.presets[i].displayName).tag(i)
+                    }
+                }
+                .pickerStyle(.menu).labelsHidden()
+                .frame(maxWidth: 160)
+            }
+            Divider().background(.white.opacity(0.1))
             HStack {
                 Spacer()
                 NewGameButton(onNewGame: { dismiss() })
@@ -630,7 +741,6 @@ struct SettingsView: View {
             SettingsRow(label: "Pieces") {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        Spacer(minLength: 0)
                         ForEach(PieceSet.allCases) { set in
                             PieceSetSwatch(pieceSet: set,
                                            isSelected: settings.pieceSet == set)
@@ -639,6 +749,7 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .frame(maxWidth: 320, alignment: .trailing)
             }
         }
     }
@@ -851,6 +962,11 @@ struct SettingsView: View {
                     Picker("Play as", selection: $game.playerColor) {
                         ForEach(PlayerColor.allCases) { color in Text(color.rawValue).tag(color) }
                     }.pickerStyle(.segmented)
+                }
+                Picker("Time control", selection: $settings.timeControlIndex) {
+                    ForEach(TimeControl.presets.indices, id: \.self) { i in
+                        Text(TimeControl.presets[i].displayName).tag(i)
+                    }
                 }
                 NewGameButton(onNewGame: { dismiss() }).environmentObject(app)
             }

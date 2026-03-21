@@ -92,7 +92,7 @@ final class AppStore: ObservableObject {
     func exitAnalysisMode() {
         gameStore.gameMode = .humanVsEngine
         gameStore.clearHistoryReview()
-        analysis.clearCritiqueSelection()
+        analysis.clearCritiqueSelection(preservePanelState: true)
         analysis.observe(gameStore, settings: settings, preserveHistory: true)
     }
 }

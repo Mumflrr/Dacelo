@@ -1,19 +1,8 @@
 // GameStore.swift
 // Dacelo
-//
-// Manages the live chess game and scratch exploration.
-// Built on ChessGame/ChessBoard — no swift-chess library dependency.
-//
-// Compared to the previous version:
-//   - positionOverrideFEN, positionOverrideLastMove, scratchChessStore,
-//     displayChessStore, displayBoardFEN, currentFEN, isReplayingMoves
-//     all collapse into two published properties: reviewGame and scratchGame
-//   - beginScratchExploration is three lines
-//   - Both sides always playable in scratch — no library workarounds needed
-//   - Robot loop is a clean async Task, no semaphore/Thread.sleep
-//   - No Combine pipelines — GameStore owns all state directly
 
 import SwiftUI
+import Combine
 
 // MARK: - PlayerColor
 
@@ -83,28 +72,20 @@ final class GameStore: ObservableObject {
 
     // MARK: - Published state
 
-    @Published var game:         ChessGame   = ChessGame()
-    @Published var gameMode:     GameMode    = .humanVsEngine
-    @Published var playerColor:  PlayerColor = .white
-    @Published var boardTheme:   BoardTheme  = .brown
-    @Published var isPaused:     Bool        = false
-
-    /// Non-nil while reviewing a historical position (read-only until tapped).
-    @Published var reviewGame:   ChessGame?  = nil
-
-    /// Non-nil while exploring a sideline from a historical position.
-    @Published var scratchGame:  ChessGame?  = nil
-
-    /// First-tap index for manual robot move (two-tap flow when paused).
-    @Published var manualRobotSelectIdx: Int? = nil
+    @Published var game:                ChessGame   = ChessGame()
+    @Published var gameMode:            GameMode    = .humanVsEngine
+    @Published var playerColor:         PlayerColor = .white
+    @Published var boardTheme:          BoardTheme  = .brown
+    @Published var isPaused:            Bool        = false
+    @Published var reviewGame:          ChessGame?  = nil
+    @Published var scratchGame:         ChessGame?  = nil
+    @Published var manualRobotSelectIdx: Int?       = nil
+    @Published var scratchHistoryIndex: Int?        = nil
+    @Published var clock:               ChessClock  = ChessClock()
 
     // MARK: - Computed display state
 
-    /// The game the board currently renders — scratch > review > live.
-    var displayGame: ChessGame {
-        scratchGame ?? reviewGame ?? game
-    }
-
+    var displayGame: ChessGame { scratchGame ?? reviewGame ?? game }
     var isExploringScratch: Bool { scratchGame != nil }
     var isReviewingHistory: Bool { reviewGame  != nil }
     var displayFEN:         String { displayGame.board.fen }
@@ -120,6 +101,9 @@ final class GameStore: ObservableObject {
     private let settings:  AppSettings
     private var robot:     ChessRobot?
     private var robotTask: Task<Void, Never>?
+    // Forwards ChessClock.objectWillChange into GameStore.objectWillChange so
+    // ContentView (which observes GameStore) re-renders on every clock tick.
+    private var clockCancellable: AnyCancellable?
 
     // MARK: - Init
 
@@ -127,6 +111,10 @@ final class GameStore: ObservableObject {
         self.engine   = engine
         self.settings = settings
         startNewGame()
+        // Bridge clock publisher — must happen after startNewGame sets up clock
+        clockCancellable = clock.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     // MARK: - New Game
@@ -135,6 +123,7 @@ final class GameStore: ObservableObject {
         cancelRobot()
         reviewGame           = nil
         scratchGame          = nil
+        scratchHistoryIndex  = nil
         isPaused             = false
         manualRobotSelectIdx = nil
         startNewGame()
@@ -151,6 +140,13 @@ final class GameStore: ObservableObject {
         }()
         game = ChessGame(fen: ChessBoard.startingFEN, mode: chessMode)
 
+        // Configure clock from saved settings
+        clock.configure(control: settings.timeControl, startingSide: .white)
+
+        if gameMode == .humanVsEngine || gameMode == .humanVsHuman {
+            clock.start()
+        }
+
         if gameMode == .humanVsEngine {
             robot = ChessRobot(
                 side:           playerColor.opposite.side,
@@ -158,30 +154,31 @@ final class GameStore: ObservableObject {
                 moveTimeMs:     settings.moveTimeMs,
                 bestMoveEngine: settings.bestMoveEngine
             )
-            kickRobotIfNeeded()
+            Task { @MainActor in self.kickRobotIfNeeded() }
         } else {
             robot = nil
         }
     }
 
-    // MARK: - Board interaction (called from BoardLayout)
+    // MARK: - Board interaction
 
     func handleTap(at index: Int) {
-        // Manual robot move while paused.
         if isPaused && isRobotsTurn {
             handleManualRobotTap(at: index)
             return
         }
-
         if isExploringScratch {
             scratchGame?.handleTap(at: index)
         } else if isReviewingHistory {
-            // First tap on a history position starts scratch exploration.
             beginScratchExploration()
             scratchGame?.handleTap(at: index)
         } else {
+            let side  = game.board.activeSide
             let moved = game.handleTap(at: index) != nil
-            if moved { kickRobotIfNeeded() }
+            if moved {
+                clock.switchTurn(movedSide: side)
+                kickRobotIfNeeded()
+            }
         }
     }
 
@@ -209,15 +206,19 @@ final class GameStore: ObservableObject {
         if isExploringScratch {
             scratchGame?.handleDrop(to: index)
         } else {
+            let side  = game.board.activeSide
             let moved = game.handleDrop(to: index) != nil
-            if moved { kickRobotIfNeeded() }
+            if moved {
+                clock.switchTurn(movedSide: side)
+                kickRobotIfNeeded()
+            }
         }
     }
 
     // MARK: - History navigation
 
     func showHistoryPosition(fen: String) {
-        scratchGame = nil   // always tear down scratch before navigating
+        scratchGame = nil
         reviewGame  = ChessGame(fen: fen, mode: .analysis)
     }
 
@@ -226,26 +227,100 @@ final class GameStore: ObservableObject {
         reviewGame  = nil
     }
 
-    // MARK: - Scratch exploration (three lines — no workarounds needed)
+    // MARK: - Scratch exploration
 
     func beginScratchExploration() {
         guard let review = reviewGame else { return }
-        scratchGame = ChessGame.scratch(from: review.board.fen)
+        scratchGame         = ChessGame.scratch(from: review.board.fen)
+        scratchHistoryIndex = nil
     }
 
     func endScratchExploration() {
-        scratchGame = nil
+        scratchGame         = nil
+        scratchHistoryIndex = nil
     }
 
-    // MARK: - Pause / manual robot
+    func goBackInHistory() {
+        if isExploringScratch, let scratch = scratchGame {
+            let current = scratchHistoryIndex ?? (scratch.history.count - 1)
+            let target  = current - 1
+            if target < 0 {
+                endScratchExploration()
+            } else {
+                scratchHistoryIndex = target
+                reviewGame = ChessGame(fen: scratch.history[target].board.fen, mode: .analysis)
+            }
+        }
+    }
+
+    func goForwardInScratch() {
+        guard isExploringScratch, let scratch = scratchGame else { return }
+        let current = scratchHistoryIndex ?? (scratch.history.count - 1)
+        let target  = current + 1
+        if target >= scratch.history.count {
+            scratchHistoryIndex = nil
+            reviewGame          = nil
+        } else {
+            scratchHistoryIndex = target
+            reviewGame = ChessGame(fen: scratch.history[target].board.fen, mode: .analysis)
+        }
+    }
+
+    var canGoBackInScratch: Bool { isExploringScratch }
+    var canGoForwardInScratch: Bool {
+        guard isExploringScratch, let scratch = scratchGame else { return false }
+        let current = scratchHistoryIndex ?? (scratch.history.count - 1)
+        return current < scratch.history.count - 1
+    }
+
+    // MARK: - Pause / Resume
 
     func togglePause() {
         guard gameMode == .humanVsEngine else { return }
         isPaused.toggle()
         manualRobotSelectIdx = nil
         robot?.controller.isPaused = isPaused
-        if !isPaused { kickRobotIfNeeded() }
+        if isPaused {
+            clock.pause()
+        } else {
+            clock.resume()
+            kickRobotIfNeeded()
+        }
     }
+
+    // MARK: - Board theme
+
+    func setBoardTheme(_ theme: BoardTheme) { boardTheme = theme }
+
+    // MARK: - Captured pieces
+
+    var capturedPieces: (white: [PieceType], black: [PieceType]) {
+        var whiteCaptured: [PieceType] = []
+        var blackCaptured: [PieceType] = []
+        let source = scratchGame ?? game
+        for record in source.history {
+            let move     = record.move
+            let previous = record.previous
+            if let captured = previous.squares[move.to], captured.side != previous.activeSide {
+                captured.side == .white ? whiteCaptured.append(captured.type)
+                                        : blackCaptured.append(captured.type)
+            }
+            if move.isEnPassant {
+                let idx = previous.activeSide == .white ? move.to + 8 : move.to - 8
+                if let captured = previous.squares[idx] {
+                    captured.side == .white ? whiteCaptured.append(captured.type)
+                                            : blackCaptured.append(captured.type)
+                }
+            }
+        }
+        let order: [PieceType] = [.queen, .rook, .bishop, .knight, .pawn]
+        let sort: ([PieceType]) -> [PieceType] = {
+            $0.sorted { (order.firstIndex(of: $0) ?? 0) < (order.firstIndex(of: $1) ?? 0) }
+        }
+        return (white: sort(whiteCaptured), black: sort(blackCaptured))
+    }
+
+    // MARK: - Robot loop
 
     private func handleManualRobotTap(at index: Int) {
         if let from = manualRobotSelectIdx {
@@ -256,14 +331,6 @@ final class GameStore: ObservableObject {
         }
     }
 
-    // MARK: - Board theme
-
-    func setBoardTheme(_ theme: BoardTheme) {
-        boardTheme = theme
-    }
-
-    // MARK: - Robot loop
-
     private func kickRobotIfNeeded() {
         guard gameMode == .humanVsEngine,
               !isPaused,
@@ -273,7 +340,7 @@ final class GameStore: ObservableObject {
               let robot
         else { return }
 
-        let board = game.board  // capture value type — no await needed
+        let board = game.board
 
         robotTask = Task { [weak self] in
             let result = await robot.think(board: board)
@@ -281,12 +348,16 @@ final class GameStore: ObservableObject {
                 guard let self else { return }
                 self.robotTask = nil
                 guard let result else { return }
-                let applied = self.game.applyRobotMove(
+                let robotSide = self.game.board.activeSide
+                let applied   = self.game.applyRobotMove(
                     from:      result.from,
                     to:        result.to,
                     promotion: result.promotion
                 )
-                if applied { self.kickRobotIfNeeded() }
+                if applied {
+                    self.clock.switchTurn(movedSide: robotSide)
+                    self.kickRobotIfNeeded()
+                }
             }
         }
     }
@@ -295,7 +366,7 @@ final class GameStore: ObservableObject {
         robotTask?.cancel()
         robotTask = nil
         let r = robot
-        robot = nil
+        robot   = nil
         Task { await r?.cancel() }
     }
 }

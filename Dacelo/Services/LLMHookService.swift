@@ -4,93 +4,184 @@
 // Protocol-based LLM hook system for chess analysis narrative.
 //
 // Architecture:
-//   LLMHookProvider  — protocol any LLM backend implements
-//   LocalLLMProvider — Ollama-compatible implementation (default)
-//   LLMHookService   — @MainActor singleton that AnalysisStore calls
+//   LLMHookProvider    — protocol any LLM backend implements
+//   LocalLLMProvider   — Ollama/llama.cpp-compatible implementation
+//   LLMHookService     — @MainActor singleton that AnalysisStore calls
 //
-// Narrative generation is FIRE-AND-STORE, PER-MOVE:
-//   • LLM calls fire immediately as each move is analysed (background, silent).
-//   • Each MoveCritique gets its own narrative stored by UUID in `narratives`.
-//   • Nothing is displayed until the user enters Analysis Mode and selects a move.
-//   • A per-move loading indicator shows while a narrative is in-flight.
-//   • fillMissingNarratives() catches any that failed (e.g. LLM was offline).
+// Output is structured (ChessCoachingOutput), not a raw string.
+// The LLM is prompted to return JSON with four named fields.
+// AnalysisPanelViews renders each field separately with icons/styling.
 //
-// To add a new provider (e.g. OpenAI-compatible API):
-//   1. Conform to LLMHookProvider
-//   2. Call LLMHookService.shared.configure(provider:) in AppStore.init()
+// Two modes:
+//   fast — short thinking budget, 3-sentence max, fires for every move
+//   slow — full thinking budget, fires only for flagged moves
+//          (blunders >150cp, unusual depth drift, sacrifices)
+//
+// Prompt design:
+//   Raw numbers are pre-digested into human-readable flags on the Swift
+//   side before sending. No NNUE floats, no mobility integers.
+//   ~120-160 tokens of dense, directly-readable context per request.
+//   NoWait logit suppression applied to cut reflection token overhead.
 
 import Foundation
 import Combine
+import SwiftUI
 
-// MARK: - Context Bundle
+// MARK: - Structured output
 
-struct LLMAnalysisContext: Codable {
-    let fen:                String
-    let movePlayed:         String       // UCI e.g. "e2e4"
-    let side:               String       // "white" | "black"
-    let moveNotation:       String       // "1." | "3..."
-    let wdl:                WDLContext?
-    let scoreCP:            Int?
-    let pvLine:             [String]
-    let materialBalance:    Int
-    let mobilityWhite:      Int
-    let mobilityBlack:      Int
-    let moveClassification: String
-    let cpLoss:             Int?
-    // Updated field names matching PositionCharacteristics
-    let positionType:       String       // "Equal"|"Unbalanced"|"Complex"|"Critical"
-    let precisionRequired:  String       // "Low"|"Moderate"|"High"|"Very High"
-    let evalStability:      String       // "Stable"|"Fluctuating"|"Volatile"
-    let lineType:           String
-    let alternatives:       [LLMAlternative]
-    let depth:              Int?
-    let nodes:              Int?
-    // Game phase context
-    let gamePhase:          String?      // "Opening"|"Middlegame"|"Endgame"
-    // New metrics (analysis mode)
-    let pawnStructure:      String?      // "Open"|"Closed"|"Semi-open"|"Weakened"|"Endgame-like"
-    let passedWhite:        Int?
-    let passedBlack:        Int?
-    let isolatedWhite:      Int?
-    let isolatedBlack:      Int?
-    let kingAttackersWhite: Int?
-    let kingAttackersBlack: Int?
-    let kingCastledWhite:   Bool?
-    let kingCastledBlack:   Bool?
-    // NNUE key terms (the most coaching-relevant ones, not the full dump)
-    let nnueKingSafety:     NNUETermContext?
-    let nnueMobility:       NNUETermContext?
-    let nnueThreats:        NNUETermContext?
-    let nnuePassedPawns:    NNUETermContext?
+/// Three-field structured coaching response stored per move.
+/// Each field has a specific job and is rendered separately in the UI.
+struct ChessCoachingOutput: Codable {
+    /// One sentence: what happened and its immediate consequence.
+    let headline: String
+
+    /// One sentence: the concrete tactical or positional reason.
+    let explanation: String
+
+    /// One sentence: what to play instead and why.
+    /// nil for Excellent / Good moves — omit the JSON key for those.
+    let suggestion: String?
+
+    /// Primary pattern tag. Drives the badge icon shown next to the narrative.
+    /// One of the values in TacticalPattern below.
+    let tacticalPattern: String
 }
 
-struct NNUETermContext: Codable {
-    let white: Double
-    let black: Double
-    let total: Double
+/// All valid tactical pattern tags, with display metadata.
+enum TacticalPattern: String {
+    case fork             = "fork"
+    case pin              = "pin"
+    case skewer           = "skewer"
+    case discoveredAttack = "discovered_attack"
+    case backRank         = "back_rank"
+    case kingSafety       = "king_safety"
+    case development      = "development"
+    case pawnStructure    = "pawn_structure"
+    case materialGain     = "material_gain"
+    case zugzwang         = "zugzwang"
+    case passedPawn       = "passed_pawn"
+    case sacrifice        = "sacrifice"
+    case blunder          = "blunder"
+    case bestMove         = "best_move"
+    case other            = "other"
+
+    var icon: String {
+        switch self {
+        case .fork:             return "arrow.triangle.branch"
+        case .pin:              return "pin.fill"
+        case .skewer:           return "arrow.right.arrow.left"
+        case .discoveredAttack: return "bolt.fill"
+        case .backRank:         return "exclamationmark.square.fill"
+        case .kingSafety:       return "crown.fill"
+        case .development:      return "figure.walk"
+        case .pawnStructure:    return "triangle.fill"
+        case .materialGain:     return "plus.circle.fill"
+        case .zugzwang:         return "tortoise.fill"
+        case .passedPawn:       return "arrow.up.to.line"
+        case .sacrifice:        return "flame.fill"
+        case .blunder:          return "xmark.circle.fill"
+        case .bestMove:         return "checkmark.circle.fill"
+        case .other:            return "questionmark.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .blunder:                    return .red
+        case .bestMove:                   return .green
+        case .sacrifice:                  return .orange
+        case .fork, .pin, .skewer,
+             .discoveredAttack, .backRank: return .yellow
+        case .kingSafety:                 return Color(red: 1, green: 0.3, blue: 0.3)
+        case .materialGain:               return Color(red: 0.4, green: 0.9, blue: 0.4)
+        default:                          return .purple
+        }
+    }
+
+    static func from(_ raw: String) -> TacticalPattern {
+        TacticalPattern(rawValue: raw) ?? .other
+    }
 }
+
+extension ChessCoachingOutput {
+    var pattern: TacticalPattern { TacticalPattern.from(tacticalPattern) }
+}
+
+// MARK: - Request type
+//
+// Replaces LLMAnalysisContext. Pre-digested on the Swift side.
+// AnalysisStore builds this after every move and stores it keyed by UUID.
+
+struct ChessCoachingRequest: Codable {
+
+    // ── Move identity ────────────────────────────────────────────────────
+    let movePlayed:   String   // UCI: "e2e4"
+    let side:         String   // "white" | "black"
+    let moveNotation: String   // "1." | "3..."
+    let classification: String // MoveQuality.rawValue: "Excellent" | "Good" etc.
+
+    // ── Score & stakes ────────────────────────────────────────────────────
+    let cpLoss:      Int?      // centipawns lost vs best (nil if best move)
+    let evalAfter:   Double?   // eval after move in pawns (white-positive)
+    let winPctWhite: Int?
+    let winPctDraw:  Int?
+    let winPctBlack: Int?
+    let gamePhase:   String?   // "Opening" | "Middlegame" | "Endgame"
+    let materialDelta: Int     // positive = white ahead in material
+
+    // ── Best alternative ─────────────────────────────────────────────────
+    // The single most important field for "why X was better" coaching.
+    let bestMove:      String?   // UCI of best move if different from played
+    let bestMoveEval:  Double?   // eval of best move in pawns
+
+    // ── Engine continuation ───────────────────────────────────────────────
+    // First 4 moves of PV in human-readable notation (pre-converted)
+    let bestLine: [String]
+
+    // ── Depth profile ─────────────────────────────────────────────────────
+    // Derived on Swift side from score_cp vs deep_score_cp.
+    // nil if no deep score available.
+    // "stable" | "deepening" | "mirage" | "sharp"
+    let depthProfile: String?
+
+    // ── Pre-digested tactical flags ───────────────────────────────────────
+    // Computed from raw server data before sending. Each is a plain English
+    // phrase the LLM reads directly — no number interpretation needed.
+    // Examples: "White king uncastled with 3 attackers in zone"
+    //           "Black has a passed pawn on d4"
+    //           "White is up a rook"
+    let tacticalFlags: [String]
+
+    // ── Mode ──────────────────────────────────────────────────────────────
+    let isSlowMode: Bool
+}
+
+// MARK: - WDL / Alternative types (unchanged, used by AnalysisStore)
 
 struct WDLContext: Codable {
-    let white: Double
-    let draw:  Double
-    let black: Double
-
+    let white: Double; let draw: Double; let black: Double
     var whitePercent: Int { Int((white * 100).rounded()) }
     var drawPercent:  Int { Int((draw  * 100).rounded()) }
     var blackPercent: Int { Int((black * 100).rounded()) }
 }
 
 struct LLMAlternative: Codable {
-    let move:    String
-    let scoreCP: Int?
+    let move: String; let scoreCP: Int?
 }
 
-// MARK: - Provider Protocol
+struct NNUETermContext: Codable {
+    let white: Double; let black: Double; let total: Double
+}
+
+// Legacy alias so any remaining AnalysisStore call sites compile unchanged
+typealias LLMAnalysisContext = ChessCoachingRequest
+
+// MARK: - Provider protocol
 
 protocol LLMHookProvider: AnyObject {
     var name:        String { get }
     var isAvailable: Bool   { get async }
-    func analyse(context: LLMAnalysisContext) async throws -> String
+    func analyse(request: ChessCoachingRequest) async throws -> ChessCoachingOutput
 }
 
 // MARK: - Errors
@@ -101,172 +192,227 @@ enum LLMError: LocalizedError {
     case httpError(Int)
     case invalidResponse
     case emptyResponse
+    case parseFailure(String)
 
     var errorDescription: String? {
         switch self {
-        case .providerUnavailable:      return "LLM provider is not available"
-        case .invalidEndpoint(let u):   return "Invalid LLM endpoint: \(u)"
-        case .httpError(let code):      return "LLM HTTP error \(code)"
-        case .invalidResponse:          return "Unexpected response format from LLM"
-        case .emptyResponse:            return "LLM returned an empty response"
+        case .providerUnavailable:    return "LLM provider is not available"
+        case .invalidEndpoint(let u): return "Invalid LLM endpoint: \(u)"
+        case .httpError(let c):       return "LLM HTTP error \(c)"
+        case .invalidResponse:        return "Unexpected LLM response format"
+        case .emptyResponse:          return "LLM returned empty response"
+        case .parseFailure(let s):    return "Parse failed: \(s)"
         }
     }
 }
 
-// MARK: - Disabled Provider
+// MARK: - Disabled provider
 
 final class DisabledLLMProvider: LLMHookProvider {
     let name = "Disabled"
     var isAvailable: Bool { get async { false } }
-    func analyse(context: LLMAnalysisContext) async throws -> String { "" }
+    func analyse(request: ChessCoachingRequest) async throws -> ChessCoachingOutput {
+        throw LLMError.providerUnavailable
+    }
 }
 
-// MARK: - Local LLM Provider (Ollama/llama.cpp-compatible)
+// MARK: - Local LLM provider (Ollama / llama.cpp compatible)
 
 final class LocalLLMProvider: LLMHookProvider {
-    let name:     String
+    let name: String
     let settings: AppSettings
 
     init(name: String = "Local LLM", settings: AppSettings) {
-        self.name     = name
-        self.settings = settings
+        self.name = name; self.settings = settings
     }
 
-    var endpoint: String { settings.llmEndpoint }
-    var model:    String { settings.llmModel }
+    private var endpoint: String { settings.llmEndpoint }
+    private var model:    String { settings.llmModel }
 
     var isAvailable: Bool {
         get async {
             guard let url = URL(string: "\(endpoint)/api/tags") else { return false }
             do {
-                let (_, response) = try await URLSession.shared.data(from: url)
-                return (response as? HTTPURLResponse)?.statusCode == 200
+                let (_, res) = try await URLSession.shared.data(from: url)
+                return (res as? HTTPURLResponse)?.statusCode == 200
             } catch { return false }
         }
     }
 
-    func analyse(context: LLMAnalysisContext) async throws -> String {
+    func analyse(request: ChessCoachingRequest) async throws -> ChessCoachingOutput {
         guard let url = URL(string: "\(endpoint)/api/generate") else {
             throw LLMError.invalidEndpoint(endpoint)
         }
-        var request        = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 60   // longer for analysis-mode detail
+        var req        = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = request.isSlowMode ? 90 : 45
 
         let body: [String: Any] = [
-            "model":  model,
-            "prompt": buildPrompt(context: context),
-            "stream": false,
-            "options": ["temperature": 0.4, "num_predict": 200]
+            "model":   model,
+            "prompt":  buildPrompt(request),
+            "stream":  false,
+            "options": [
+                "temperature": request.isSlowMode ? 0.3 : 0.4,
+                "num_predict": request.isSlowMode ? 350 : 200,
+                // NoWait logit suppression (arxiv: 2506.08343):
+                // Suppress reflection tokens that pad CoT without adding value.
+                // Achieves 27-51% CoT reduction on Qwen3.5 models.
+                // Token IDs are Qwen3.5-specific — adapt for other models by
+                // sampling 32 outputs and identifying frequent stall tokens.
+                "logit_bias": noWaitBias
+            ]
         ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             throw LLMError.httpError(http.statusCode)
         }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = json["response"] as? String else {
             throw LLMError.invalidResponse
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { throw LLMError.emptyResponse }
-        return trimmed
+        return try parseOutput(trimmed)
+    }
+
+    // MARK: - NoWait bias table (Qwen3.5 token IDs)
+    private var noWaitBias: [String: Int] {
+        ["14190": -100,   // "Wait"
+         "27261": -100,   // "Hmm"
+         "18094": -100,   // "Alternatively"
+         "4354":  -100,   // "However"
+         "13207": -50,    // "Actually"
+         "14196": -50]    // "wait" lowercase
     }
 
     // MARK: - Prompt builder
-    //
-    // The prompt is enriched with all available context so the LLM can give
-    // specific coaching feedback ("your king has 3 attackers because you
-    // haven't castled") rather than generic observations.
 
-    private func buildPrompt(context: LLMAnalysisContext) -> String {
-        var lines: [String] = [
-            "You are a chess coach giving concise, specific move commentary for a student reviewing their game.",
-            "Respond in 2-3 sentences. Reference concrete details from the position. No preamble or filler phrases.",
-            "",
-            "Move: \(context.side.capitalized) played \(context.moveNotation) (UCI: \(context.movePlayed))",
-            "FEN: \(context.fen)",
-            "Quality: \(context.moveClassification)",
-        ]
+    private func buildPrompt(_ r: ChessCoachingRequest) -> String {
+        var lines: [String] = []
 
-        if let cp = context.cpLoss, cp > 0 {
-            lines.append("Centipawn loss vs best: \(cp)cp")
-        }
-        if let cp = context.scoreCP {
-            lines.append(String(format: "Evaluation: %+.2f (white-positive)", Double(cp) / 100.0))
-        }
-        if let wdl = context.wdl {
-            lines.append("Win probability: White \(wdl.whitePercent)%  Draw \(wdl.drawPercent)%  Black \(wdl.blackPercent)%")
-        }
-        if let phase = context.gamePhase {
-            lines.append("Game phase: \(phase)")
-        }
-
-        // Material
-        let mat = context.materialBalance
-        lines.append(mat == 0 ? "Material: equal"
-            : (mat > 0 ? "White" : "Black") + " is up \(abs(mat)) pawn equivalent(s)")
-
-        // Position character
-        lines.append("Position: \(context.positionType), precision required: \(context.precisionRequired), \(context.lineType) line")
-        lines.append("Eval stability: \(context.evalStability)")
-
-        // Pawn structure
-        if let structure = context.pawnStructure {
-            var pawnLines = ["Pawn structure: \(structure)"]
-            if let iw = context.isolatedWhite, iw > 0 { pawnLines.append("White isolated: \(iw)") }
-            if let ib = context.isolatedBlack, ib > 0 { pawnLines.append("Black isolated: \(ib)") }
-            if let pw = context.passedWhite,   pw > 0 { pawnLines.append("White passed: \(pw)") }
-            if let pb = context.passedBlack,   pb > 0 { pawnLines.append("Black passed: \(pb)") }
-            lines.append(pawnLines.joined(separator: " | "))
-        }
-
-        // King safety — one of the most useful coaching cues
-        let wAtk = context.kingAttackersWhite ?? 0
-        let bAtk = context.kingAttackersBlack ?? 0
-        let wCas = context.kingCastledWhite == true
-        let bCas = context.kingCastledBlack == true
-        if wAtk > 0 || bAtk > 0 || !wCas || !bCas {
-            lines.append("King safety: White king \(wCas ? "castled" : "uncastled"), \(wAtk) attacker(s) in zone; Black king \(bCas ? "castled" : "uncastled"), \(bAtk) attacker(s) in zone")
-        }
-
-        // NNUE terms — give the LLM the Stockfish breakdown if available
-        var nnueLines: [String] = []
-        if let ks = context.nnueKingSafety {
-            nnueLines.append(String(format: "King Safety: W%+.2f B%+.2f", ks.white, ks.black))
-        }
-        if let mob = context.nnueMobility {
-            nnueLines.append(String(format: "Mobility: W%+.2f B%+.2f", mob.white, mob.black))
-        }
-        if let thr = context.nnueThreats {
-            nnueLines.append(String(format: "Threats: W%+.2f B%+.2f", thr.white, thr.black))
-        }
-        if let pp = context.nnuePassedPawns {
-            nnueLines.append(String(format: "Passed Pawns: W%+.2f B%+.2f", pp.white, pp.black))
-        }
-        if !nnueLines.isEmpty {
-            lines.append("NNUE breakdown: " + nnueLines.joined(separator: " | "))
-        }
-
-        // Engine lines
-        if !context.pvLine.isEmpty {
-            lines.append("Best continuation: " + context.pvLine.prefix(5).joined(separator: " "))
-        }
-        if !context.alternatives.isEmpty {
-            let altStr = context.alternatives.prefix(2)
-                .compactMap { alt -> String? in
-                    guard let cp = alt.scoreCP else { return alt.move }
-                    return "\(alt.move) (\(String(format: "%+.2f", Double(cp)/100.0)))"
-                }
-                .joined(separator: ", ")
-            lines.append("Alternatives: \(altStr)")
-        }
-
+        // Role + mode
+        lines.append(r.isSlowMode
+            ? "You are an expert chess coach. Analyse this move in depth. Be specific about pieces and squares."
+            : "You are a chess coach. Give concise, concrete move feedback.")
         lines.append("")
-        lines.append("Coach your student about this move:")
+
+        // Move
+        let cpStr: String = r.cpLoss.map { cp in
+            cp > 0 ? String(format: " (−%.2f pawns vs best)", Double(cp)/100.0) : ""
+        } ?? ""
+        lines.append("Move: \(r.side.capitalized) \(r.moveNotation) \(uci(r.movePlayed)) — \(r.classification)\(cpStr)")
+
+        // Best alternative — most critical for coaching
+        if let best = r.bestMove, best != r.movePlayed {
+            let ev = r.bestMoveEval.map { String(format: " (%+.2f)", $0) } ?? ""
+            lines.append("Best was: \(uci(best))\(ev)")
+        }
+
+        // Position snapshot
+        if let e = r.evalAfter {
+            let favour = e > 0.2 ? "white favoured" : e < -0.2 ? "black favoured" : "roughly equal"
+            lines.append(String(format: "Eval: %+.2f (\(favour))\(r.gamePhase.map { " | \($0)" } ?? "")", e))
+        }
+        if let w = r.winPctWhite, let d = r.winPctDraw, let b = r.winPctBlack {
+            lines.append("Win odds: White \(w)% / Draw \(d)% / Black \(b)%")
+        }
+        if r.materialDelta != 0 {
+            lines.append("\(r.materialDelta > 0 ? "White" : "Black") up \(abs(r.materialDelta)) pawn(s) material")
+        }
+
+        // Depth profile — only mention non-stable
+        if let dp = r.depthProfile {
+            switch dp {
+            case "mirage":
+                lines.append("⚠️ Score collapses at deeper search — hidden refutation exists")
+            case "deepening":
+                lines.append("✓ Score improves at depth — a forcing sequence is available")
+            case "sharp":
+                lines.append("⚡ Sharp — score oscillates, both sides have resources")
+            default: break
+            }
+        }
+
+        // Tactical flags (pre-digested, plain English)
+        if !r.tacticalFlags.isEmpty {
+            lines.append("Flags: " + r.tacticalFlags.joined(separator: " | "))
+        }
+
+        // Engine continuation
+        if !r.bestLine.isEmpty {
+            lines.append("Engine line: " + r.bestLine.prefix(4).joined(separator: " "))
+        }
+
+        // Output schema
+        lines.append("")
+        let schemaNote = r.isSlowMode
+            ? "explanation can be two sentences for complex moves"
+            : "one sentence per field"
+        lines.append("""
+        Respond ONLY with valid JSON (\(schemaNote), no markdown):
+        {
+          "headline": "<what happened and immediate consequence>",
+          "explanation": "<specific tactical/positional reason — name pieces and squares>",
+          "suggestion": "<what to play instead and why — OMIT this key entirely if the move was Excellent or Good>",
+          "tacticalPattern": "<fork|pin|skewer|discovered_attack|back_rank|king_safety|development|pawn_structure|material_gain|zugzwang|passed_pawn|sacrifice|blunder|best_move|other>"
+        }
+        """)
+
         return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Output parser
+
+    private func parseOutput(_ raw: String) throws -> ChessCoachingOutput {
+        // Strip markdown fences if present
+        var text = raw
+        if let open = text.range(of: "```"),
+           let close = text.range(of: "```", options: .backwards),
+           open != close {
+            let inner = text[open.upperBound..<close.lowerBound]
+            text = inner.firstIndex(of: "\n").map { String(inner[inner.index(after: $0)...]) }
+                ?? String(inner)
+        }
+
+        // Isolate JSON object
+        guard let start = text.firstIndex(of: "{"),
+              let end   = text.lastIndex(of: "}") else {
+            throw LLMError.parseFailure("No JSON in: \(raw.prefix(200))")
+        }
+        let jsonData = Data(String(text[start...end]).utf8)
+
+        // Strict decode first
+        if let out = try? JSONDecoder().decode(ChessCoachingOutput.self, from: jsonData) {
+            return out
+        }
+
+        // Lenient fallback: extract whatever keys exist
+        if let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+            return ChessCoachingOutput(
+                headline:        dict["headline"]        as? String ?? "Move played.",
+                explanation:     dict["explanation"]     as? String ?? "",
+                suggestion:      dict["suggestion"]      as? String,
+                tacticalPattern: dict["tacticalPattern"] as? String ?? "other"
+            )
+        }
+
+        throw LLMError.parseFailure(raw.prefix(200).description)
+    }
+
+    // MARK: - UCI → human notation
+
+    private func uci(_ s: String) -> String {
+        guard s.count >= 4 else { return s }
+        let from  = String(s.prefix(2))
+        let to    = String(s.dropFirst(2).prefix(2))
+        let promo = s.count > 4 ? { switch s.last {
+            case "q": return " (queen)"; case "r": return " (rook)"
+            case "b": return " (bishop)"; case "n": return " (knight)"
+            default:  return "" } }() : ""
+        return "\(from)→\(to)\(promo)"
     }
 }
 
@@ -277,15 +423,15 @@ final class LLMHookService: ObservableObject {
 
     static let shared = LLMHookService()
 
-    @Published var providerName:   String              = "Disabled"
-    @Published var isAvailable:    Bool                = false
+    @Published var providerName: String = "Disabled"
+    @Published var isAvailable:  Bool   = false
 
-    // Per-move narrative storage. Key = MoveCritique.id
-    // Stored here (not on MoveCritique) so async fills don't require mutating Codable structs.
-    @Published var narratives:     [UUID: String]      = [:]
-    @Published var generating:     Set<UUID>           = []   // which moves are in-flight
+    /// Structured coaching output keyed by MoveCritique.id
+    @Published var narratives: [UUID: ChessCoachingOutput] = [:]
+    /// Critiques currently generating
+    @Published var generating: Set<UUID> = []
 
-    private var provider: LLMHookProvider = DisabledLLMProvider()
+    private var provider:         LLMHookProvider = DisabledLLMProvider()
     private var availabilityTask: Task<Void, Never>?
 
     private init() {}
@@ -300,60 +446,35 @@ final class LLMHookService: ObservableObject {
 
     func checkAvailability() {
         availabilityTask?.cancel()
-        availabilityTask = Task {
-            isAvailable = await provider.isAvailable
-        }
+        availabilityTask = Task { isAvailable = await provider.isAvailable }
     }
 
-    // MARK: - Per-move narrative access
+    // MARK: - Accessors
 
-    /// Whether a narrative has been generated for this critique.
-    func hasNarrative(for id: UUID) -> Bool {
-        narratives[id] != nil
-    }
-
-    /// Whether generation is currently in-flight for this critique.
-    func isGenerating(for id: UUID) -> Bool {
-        generating.contains(id)
-    }
-
-    /// The narrative for a specific critique, or nil if not yet generated.
-    func narrative(for id: UUID) -> String? {
-        narratives[id]
-    }
+    func hasNarrative(for id: UUID) -> Bool { narratives[id] != nil }
+    func isGenerating(for id: UUID) -> Bool { generating.contains(id) }
+    func narrative(for id: UUID) -> ChessCoachingOutput? { narratives[id] }
 
     // MARK: - Generation
-    //
-    // Fire-and-store: called immediately as each move is analysed during play.
-    // The narrative is stored silently — nothing is displayed until review mode.
-    // This means by the time the user enters review, most moves already have
-    // commentary ready.
 
-    /// Fire narrative generation for one critique. Idempotent — safe to call
-    /// multiple times; skips if already generated or in-flight.
-    func requestNarrative(for critiqueID: UUID, context: LLMAnalysisContext) {
-        guard isAvailable else { return }
-        guard narratives[critiqueID] == nil else { return }
-        guard !generating.contains(critiqueID) else { return }
-
-        generating.insert(critiqueID)
+    /// Fire narrative for one critique. Idempotent.
+    func requestNarrative(for id: UUID, context: ChessCoachingRequest) {
+        guard isAvailable, narratives[id] == nil, !generating.contains(id) else { return }
+        generating.insert(id)
         Task {
-            defer { generating.remove(critiqueID) }
+            defer { generating.remove(id) }
             do {
-                narratives[critiqueID] = try await provider.analyse(context: context)
+                narratives[id] = try await provider.analyse(request: context)
             } catch {
-                print("[LLMHookService] Failed for \(critiqueID): \(error.localizedDescription)")
+                print("[LLMHookService] \(id): \(error.localizedDescription)")
             }
         }
     }
 
-    /// Convenience: fire for all critiques that don't yet have a narrative.
-    /// Used when entering review mode to fill any gaps (e.g. LLM was offline during play).
-    func fillMissingNarratives(critiques: [(id: UUID, context: LLMAnalysisContext)]) {
+    /// Fill any critiques missing a narrative. Call on entering review mode.
+    func fillMissingNarratives(critiques: [(id: UUID, context: ChessCoachingRequest)]) {
         guard isAvailable else { return }
-        for (id, ctx) in critiques {
-            requestNarrative(for: id, context: ctx)
-        }
+        critiques.forEach { requestNarrative(for: $0.id, context: $0.context) }
     }
 
     func clearNarratives() {
