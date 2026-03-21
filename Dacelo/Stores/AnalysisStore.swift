@@ -27,7 +27,6 @@
 
 import Foundation
 import Combine
-import Chess
 
 @MainActor
 final class AnalysisStore: ObservableObject {
@@ -112,15 +111,9 @@ final class AnalysisStore: ObservableObject {
         selectedCritiqueIndex = index
         isReviewingHistory    = true
 
-        // If we're already in scratch exploration, tear it down before
-        // showing the new position — otherwise the old scratch store stays
-        // active and beginScratchExploration never runs for the new position.
-        if gameStore?.isExploringScratch == true {
-            gameStore?.endScratchExploration()
-        }
-
-        // Restore board to the position after this move
-        gameStore?.showPosition(fen: critique.fen, lastMove: critique.move)
+        // Tear down any existing scratch before showing the new position.
+        gameStore?.endScratchExploration()
+        gameStore?.showHistoryPosition(fen: critique.fen)
 
         // Restore all analysis panel state from the snapshot
         let s = critique.snapshot
@@ -149,7 +142,6 @@ final class AnalysisStore: ObservableObject {
         kingCastledBlack       = s.kingCastledBlack
         bestMoveArrows         = []
 
-        // Fire LLM narrative if not already available
         requestNarrativeIfNeeded(for: critique)
     }
 
@@ -157,9 +149,7 @@ final class AnalysisStore: ObservableObject {
     func clearCritiqueSelection() {
         selectedCritiqueIndex = nil
         isReviewingHistory    = false
-        gameStore?.clearPositionOverride()
-
-        // Restore live panel state — clear to avoid showing stale historical data
+        gameStore?.clearHistoryReview()
         clearLivePanel()
     }
 
@@ -184,38 +174,34 @@ final class AnalysisStore: ObservableObject {
     // MARK: - Public API
 
     // Call this ONCE from AppStore.init(), never again.
-    //
-    // Threading note: ChessStore.$game publishes on the chess-engine background
-    // thread. .receive(on: DispatchQueue.main) is required on every pipeline
-    // that consumes it to avoid the Thread Performance Checker priority-inversion
-    // warning and potential @MainActor data races.
     func observeScratch(_ gameStore: GameStore) {
-        gameStore.$scratchChessStore
+        gameStore.$scratchGame
             .compactMap { $0 }
-            .flatMap { $0.$game }
-            .receive(on: DispatchQueue.main)
-            .removeDuplicates { $0.board.FEN == $1.board.FEN }
+            .removeDuplicates { $0.board.fen == $1.board.fen }
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] game in
-                self?.handlePositionChange(game, appendToHistory: false)
+                self?.handlePositionChange(fen: game.board.fen,
+                                           history: game.history,
+                                           appendToHistory: false)
             }
             .store(in: &scratchCancellables)
     }
 
-    // observe() subscribes to the live game store only.
     func observe(_ gameStore: GameStore, settings: AppSettings? = nil, preserveHistory: Bool = false) {
         self.gameStore   = gameStore
         self.appSettings = settings
         cancellables.removeAll()
         if !preserveHistory { clearHistory() }
 
-        gameStore.$chessStore
-            .flatMap { $0.$game }
-            .receive(on: DispatchQueue.main)   // ← same threading fix as observeScratch
-            .removeDuplicates { $0.board.FEN == $1.board.FEN }
+        gameStore.$game
+            .removeDuplicates { $0.board.fen == $1.board.fen }
             .dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] game in
-                self?.handlePositionChange(game, appendToHistory: true)
+                self?.handlePositionChange(fen: game.board.fen,
+                                           history: game.history,
+                                           appendToHistory: true)
             }
             .store(in: &cancellables)
     }
@@ -224,16 +210,7 @@ final class AnalysisStore: ObservableObject {
 
     /// Show hint arrows for the top `count` moves (1–3).
     func requestHint(count: Int = 1) {
-        let fen: String
-        if let scratchFEN = gameStore?.scratchChessStore?.game.board.FEN {
-            fen = scratchFEN
-        } else if let overrideFEN = gameStore?.positionOverrideFEN {
-            fen = overrideFEN
-        } else {
-            guard let liveFEN = gameStore?.currentFEN, !liveFEN.isEmpty else { return }
-            fen = liveFEN
-        }
-        guard !fen.isEmpty, !isRequestingHint else { return }
+        guard let fen = gameStore?.displayFEN, !fen.isEmpty, !isRequestingHint else { return }
         let clampedCount = max(1, min(count, 3))
         isRequestingHint = true
         Task {
@@ -319,8 +296,7 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Position change handler
 
-    private func handlePositionChange(_ game: Chess.Game, appendToHistory: Bool) {
-        let fen = game.board.FEN
+    private func handlePositionChange(fen: String, history: [MoveRecord], appendToHistory: Bool) {
         guard !fen.hasPrefix("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR") else { return }
 
         bestMoveArrows = []
@@ -333,34 +309,14 @@ final class AnalysisStore: ObservableObject {
         let displayNum = sideJustMoved == "white" ? fullMove : max(1, fullMove - 1)
         let movePrefix = sideJustMoved == "white" ? "\(displayNum)." : "\(displayNum)..."
 
-        let lastMove: Chess.Move? = {
-            guard let lastTurn = game.board.turns.last else { return nil }
-            return lastTurn.black ?? lastTurn.white
-        }()
-
-        let lastUCI: String = {
-            guard let move = lastMove,
-                  move.start.isBoardPosition,
-                  move.end.isBoardPosition else { return "" }
-            let from = move.start.FEN
-            let to   = move.end.FEN
-            var uci  = from + to
-            if case .promotion(let piece) = move.sideEffect {
-                switch piece {
-                case .queen:  uci += "q"
-                case .rook:   uci += "r"
-                case .bishop: uci += "b"
-                case .knight: uci += "n"
-                default:      break
-                }
-            }
-            return uci
-        }()
+        // Derive last move and piece type from our own MoveRecord history.
+        let lastRecord = history.last
+        let lastUCI    = lastRecord?.move.uci ?? ""
 
         let pieceType: String = {
-            guard let move = lastMove, move.end.isBoardPosition else { return "p" }
-            let destPiece = game.board.squares[move.end].piece
-            switch destPiece?.pieceType {
+            guard let record = lastRecord else { return "p" }
+            let dest = record.board.squares[record.move.to]
+            switch dest?.type {
             case .knight: return "n"
             case .bishop: return "b"
             case .rook:   return "r"

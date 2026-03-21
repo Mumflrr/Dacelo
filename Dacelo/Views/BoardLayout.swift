@@ -1,245 +1,171 @@
-// BoardView.swift
+// BoardLayout.swift
 // Dacelo
+//
+// Chess board UI built on ChessGame/ChessBoard.
+//
+// Compared to the previous version:
+//   - No ChessStore, no ChessLibrary imports
+//   - Both sides work identically — no white-only tap workaround
+//   - Scratch exploration just works — no special black-tap handler
+//   - Selection and pip highlights driven directly by ChessGame.selectedSquare
+//     and ChessGame.legalDestinations — no library square.selected flags
+//   - Drag state clears reliably via onChange(of: gameStore.displayFEN)
+//   - canDragPiece is one simple expression
 
 import SwiftUI
-import Chess
 
-// MARK: - Board
+// MARK: - BoardLayout
 
 struct BoardLayout: View {
     @EnvironmentObject var gameStore: GameStore
     let boardTheme: BoardTheme
-    let pieceSet: PieceSet
-    let isFlipped: Bool
+    let pieceSet:   PieceSet
+    let isFlipped:  Bool
 
-    let columns: [GridItem] = Array(repeating: GridItem(.flexible(), spacing: 0), count: 8)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 8)
 
-    @State private var draggingFromVisualIdx: Int? = nil
-    @State private var dragOffset: CGSize          = .zero
-    @State private var squareSize: CGFloat         = 0
-    @State private var isDropping: Bool            = false
+    @State private var draggingFromVisualIdx: Int?    = nil
+    @State private var dragOffset:            CGSize  = .zero
+    @State private var isDropping:            Bool    = false
 
-    // Always current — reads directly from the @Published property on gameStore.
-    private var activeStore: ChessStore { gameStore.displayChessStore }
-
-    init(boardTheme: BoardTheme, pieceSet: PieceSet, isFlipped: Bool) {
-        self.boardTheme = boardTheme
-        self.pieceSet   = pieceSet
-        self.isFlipped  = isFlipped
-    }
+    private var display: ChessGame { gameStore.displayGame }
 
     var body: some View {
-        // ── Re-render dependency ─────────────────────────────────────────────
-        //
-        // Reading displayBoardFEN here registers a SwiftUI dependency on it.
-        // Both the live-game sink and the scratch-game sink in GameStore write
-        // to this @Published String (always on main). This body re-evaluates
-        // after every accepted move in either mode, which is what clears the
-        // dragging state and re-draws piece positions correctly.
-        //
-        // The old code watched activeStore.game.board.FEN — a computed property
-        // on an unobserved reference type — which never triggered a re-render
-        // when a scratch move was accepted.
-        let _ = gameStore.displayBoardFEN
+        // Reading displayFEN registers a SwiftUI dependency so the board
+        // re-renders after every move in live, review, and scratch mode.
+        let _ = gameStore.displayFEN
 
-        GeometryReader { geometry in
-            let side = min(geometry.size.width, geometry.size.height)
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
             let sqSz = side / 8
 
             ZStack {
-                // ── Grid ─────────────────────────────────────────────
+                // ── Grid ──────────────────────────────────────────────
                 LazyVGrid(columns: columns, spacing: 0) {
                     ForEach(0..<64) { visualIdx in
-                        let bIdx = boardIdx(visualIdx)
-                        ZStack {
-                            SquareBackground(idx: bIdx, theme: boardTheme)
-                                .environmentObject(activeStore)
-
-                            if !isDropping {
-                                SquareMoveHighlight(bIdx)
-                                    .environmentObject(activeStore)
-                                SquareSelected(bIdx)
-                                    .environmentObject(activeStore)
-                                SquareTargeted(bIdx)
-                                    .environmentObject(activeStore)
-                            }
-
-                            if gameStore.manualSelectIdx == bIdx {
-                                Rectangle()
-                                    .fill(Color.yellow.opacity(0.45))
-                            }
-
-                            if draggingFromVisualIdx != visualIdx {
-                                squarePiece(for: bIdx)
-                            }
-                        }
-                        .frame(width: sqSz, height: sqSz)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            handleTap(boardIdx: bIdx)
-                        }
+                        let bIdx = boardIndex(visualIdx)
+                        squareView(bIdx: bIdx, sqSz: sqSz, visualIdx: visualIdx)
+                            .frame(width: sqSz, height: sqSz)
+                            .contentShape(Rectangle())
+                            .onTapGesture { gameStore.handleTap(at: bIdx) }
                     }
                 }
                 .frame(width: side, height: side)
 
                 // ── Floating piece during drag ────────────────────────
                 if let fromVisual = draggingFromVisualIdx,
-                   let piece = activeStore.game.board.squares[Chess.Position(boardIdx(fromVisual))].piece {
-                    PieceSetImageView(piece: piece, pieceSet: pieceSet)
+                   let piece = display.board.squares[boardIndex(fromVisual)] {
+                    pieceImage(piece)
                         .frame(width: sqSz * 1.15, height: sqSz * 1.15)
                         .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
                         .offset(dragOffset)
                         .position(squareCenter(visualIdx: fromVisual, sqSz: sqSz))
                         .allowsHitTesting(false)
                         .zIndex(10)
-                        .animation(.interactiveSpring(response: 0.15), value: dragOffset)
                 }
             }
             .frame(width: side, height: side)
-            // ── Drag gesture ─────────────────────────────────────────
-            .gesture(
-                DragGesture(minimumDistance: 6, coordinateSpace: .local)
-                    .onChanged { value in
-                        guard !gameStore.isReplayingMoves else { return }
-                        if draggingFromVisualIdx == nil {
-                            if gameStore.positionOverrideFEN != nil && !gameStore.isExploringScratch {
-                                beginScratchFromHistory()
-                            }
-
-                            guard
-                                let vIdx  = squareVisualIdx(at: value.startLocation, sqSz: sqSz),
-                                let piece = activeStore.game.board.squares[Chess.Position(boardIdx(vIdx))].piece,
-                                canDragPiece(piece, at: boardIdx(vIdx))
-                            else { return }
-                            draggingFromVisualIdx = vIdx
-                            activeStore.gameAction(.userDragged(position: boardIdx(vIdx)))
-                        }
-                        guard let fromVisual = draggingFromVisualIdx else { return }
-                        let center = squareCenter(visualIdx: fromVisual, sqSz: sqSz)
-                        dragOffset = CGSize(
-                            width:  value.location.x - center.x,
-                            height: value.location.y - center.y
-                        )
-                    }
-                    .onEnded { value in
-                        guard let fromVisual = draggingFromVisualIdx else { return }
-
-                        if let toVisual = squareVisualIdx(at: value.location, sqSz: sqSz) {
-                            let to = boardIdx(toVisual)
-                            if gameStore.isPaused && gameStore.isRobotsTurn() {
-                                draggingFromVisualIdx = nil
-                                dragOffset = .zero
-                                gameStore.manualSelectIdx = nil
-                                robotController?.submitManualMove(from: boardIdx(fromVisual), to: to)
-                            } else {
-                                isDropping = true
-                                activeStore.gameAction(.userDropped(position: to))
-
-                                // Fallback reset if the drop was illegal (FEN unchanged).
-                                let fenBefore = activeStore.game.board.FEN
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    if activeStore.game.board.FEN == fenBefore {
-                                        draggingFromVisualIdx = nil
-                                        dragOffset = .zero
-                                        isDropping = false
-                                    }
-                                }
-                            }
-                        } else {
-                            draggingFromVisualIdx = nil
-                            dragOffset = .zero
-                        }
-                    }
-            )
-            // ── Drag state cleanup ────────────────────────────────────
-            //
-            // Watches gameStore.displayBoardFEN (a @Published String updated by
-            // both the live and scratch sinks on the main thread) rather than
-            // activeStore.game.board.FEN (a computed property on an unobserved
-            // reference that never triggered this onChange for scratch moves).
-            .onChange(of: gameStore.displayBoardFEN) { _, _ in
+            .gesture(dragGesture(sqSz: sqSz))
+            .onChange(of: gameStore.displayFEN) { _, _ in
                 withAnimation(.easeOut(duration: 0.08)) {
                     draggingFromVisualIdx = nil
                     dragOffset            = .zero
                 }
                 isDropping = false
             }
-            .onAppear   { squareSize = sqSz }
-            .onChange(of: sqSz) { _, new in squareSize = new }
         }
     }
 
-    // MARK: - Tap handling
+    // MARK: - Square view
 
-    private func handleTap(boardIdx bIdx: Int) {
-        print("TAP bIdx=\(bIdx) isExploring=\(gameStore.isExploringScratch) overrideFEN=\(gameStore.positionOverrideFEN != nil) isPaused=\(gameStore.isPaused)")
-        guard !gameStore.isReplayingMoves else { return }
+    @ViewBuilder
+    private func squareView(bIdx: Int, sqSz: CGFloat, visualIdx: Int) -> some View {
+        ZStack {
+            // Background colour
+            squareColor(bIdx)
 
-        if gameStore.isPaused && gameStore.isRobotsTurn() {
-            print("TAP → manual move path, returning early")
-            gameStore.handleManualTap(boardIdx: bIdx)
-            return
+            // Selection highlight (first tap)
+            if display.selectedSquare == bIdx {
+                Color.yellow.opacity(0.45)
+            }
+
+            // Legal destination pips
+            if display.legalDestinations.contains(bIdx) {
+                if display.board.squares[bIdx] != nil {
+                    // Capture: ring around occupied square
+                    Circle()
+                        .strokeBorder(Color.black.opacity(0.25), lineWidth: sqSz * 0.08)
+                        .padding(2)
+                } else {
+                    // Empty: small dot
+                    Circle()
+                        .fill(Color.black.opacity(0.20))
+                        .frame(width: sqSz * 0.28, height: sqSz * 0.28)
+                }
+            }
+
+            // Manual robot selection highlight (paused mode)
+            if gameStore.manualRobotSelectIdx == bIdx {
+                Color.orange.opacity(0.40)
+            }
+
+            // Piece (hidden while being dragged)
+            if draggingFromVisualIdx != visualIdx {
+                if let piece = display.board.squares[bIdx] {
+                    pieceImage(piece)
+                }
+            }
         }
-
-        if gameStore.positionOverrideFEN != nil && !gameStore.isExploringScratch {
-            beginScratchFromHistory()
-        }
-
-        let storeFEN   = activeStore.game.board.FEN
-        let userPaused = activeStore.game.userPaused
-        let side       = activeStore.game.board.playingSide
-        print("[scratch] status=\(activeStore.game.computeGameStatus()) paused=\(activeStore.game.userPaused)")
-        print("FIRING ACTION on store FEN=\(storeFEN) userPaused=\(userPaused) playingSide=\(side)")
-        activeStore.gameAction(.userTappedSquare(position: bIdx))
-        print("AFTER ACTION store FEN=\(activeStore.game.board.FEN)")
-        print("[turn] playingSide=\(activeStore.game.board.playingSide) white=\(type(of: activeStore.game.white)) black=\(type(of: activeStore.game.black))")
     }
 
-    /// Build the move list from moveCritiques up to the selected index and
-    /// hand it to GameStore to replay into a fresh scratch ChessStore.
-    private func beginScratchFromHistory() {
-        guard let fen = gameStore.positionOverrideFEN else { return }
-        print("BEGIN SCRATCH from FEN: \(fen)")
-        gameStore.beginScratchExploration(targetFEN: fen, lastMove: gameStore.positionOverrideLastMove)
+    // MARK: - Drag gesture
+
+    private func dragGesture(sqSz: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            .onChanged { value in
+                if draggingFromVisualIdx == nil {
+                    guard let vIdx = visualIndex(at: value.startLocation, sqSz: sqSz) else { return }
+                    let bIdx = boardIndex(vIdx)
+                    let started = gameStore.handleDragStart(at: bIdx)
+                    guard started else { return }
+                    draggingFromVisualIdx = vIdx
+                }
+                guard let fromVisual = draggingFromVisualIdx else { return }
+                let center = squareCenter(visualIdx: fromVisual, sqSz: sqSz)
+                dragOffset = CGSize(
+                    width:  value.location.x - center.x,
+                    height: value.location.y - center.y
+                )
+            }
+            .onEnded { value in
+                defer {
+                    draggingFromVisualIdx = nil
+                    dragOffset = .zero
+                }
+                guard draggingFromVisualIdx != nil else { return }
+
+                guard let toVisual = visualIndex(at: value.location, sqSz: sqSz) else {
+                    return
+                }
+                let to = boardIndex(toVisual)
+                isDropping = true
+                gameStore.handleDrop(at: to)
+
+                // Fallback reset if the move was illegal (FEN unchanged after 0.1s).
+                let fenBefore = gameStore.displayFEN
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if gameStore.displayFEN == fenBefore { isDropping = false }
+                }
+            }
     }
 
-    // MARK: - Drag permission
+    // MARK: - Helpers
 
-    private func canDragPiece(_ piece: Chess.Piece, at bIdx: Int) -> Bool {
-        if gameStore.isPaused && gameStore.isRobotsTurn() {
-            let leelaIsBlack = gameStore.playerColor == .white
-            return leelaIsBlack ? piece.side == .black : piece.side == .white
-        }
-        return pieceMatchesActiveSide(piece)
-    }
-
-    // MARK: - Flip
-
-    private func boardIdx(_ visualIdx: Int) -> Int {
+    private func boardIndex(_ visualIdx: Int) -> Int {
         isFlipped ? (63 - visualIdx) : visualIdx
     }
 
-    // MARK: - Active-side guard
-
-    private func pieceMatchesActiveSide(_ piece: Chess.Piece) -> Bool {
-        let parts = activeStore.game.board.FEN.split(separator: " ")
-        guard parts.count > 1 else { return true }
-        switch String(parts[1]) {
-        case "w": return piece.side == .white
-        case "b": return piece.side == .black
-        default:  return true
-        }
-    }
-
-    // MARK: - Robot controller
-
-    private var robotController: RobotController? {
-        gameStore.gameMode == .humanVsEngine ? gameStore.robotController : nil
-    }
-
-    // MARK: - Coordinate helpers
-
-    private func squareVisualIdx(at point: CGPoint, sqSz: CGFloat) -> Int? {
+    private func visualIndex(at point: CGPoint, sqSz: CGFloat) -> Int? {
         guard sqSz > 0 else { return nil }
         let col = Int(point.x / sqSz)
         let row = Int(point.y / sqSz)
@@ -254,30 +180,29 @@ struct BoardLayout: View {
         )
     }
 
+    private func squareColor(_ idx: Int) -> Color {
+        // Dark square when rank + file is even (matches standard chess coloring).
+        let rank = idx.rank
+        let file = idx.file
+        return (rank + file) % 2 == 0 ? boardTheme.dark : boardTheme.light
+    }
+
     @ViewBuilder
-    private func squarePiece(for bIdx: Int) -> some View {
-        if let piece = activeStore.game.board.squares[Chess.Position(bIdx)].piece {
-            PieceSetImageView(piece: piece, pieceSet: pieceSet)
-        }
+    private func pieceImage(_ piece: Piece) -> some View {
+        PieceSetImageView(piece: piece, pieceSet: pieceSet)
     }
 }
 
-// MARK: - Custom square background
+// MARK: - PieceSetImageView bridge
+//
+// PieceSetImageView previously took a Chess.Piece from the library.
+// It now takes our own Piece type. Update PieceSetImageView to accept
+// Dacelo.Piece (side: Side, type: PieceType) instead of Chess.Piece.
 
-struct SquareBackground: View {
-    @EnvironmentObject var store: ChessStore
-    let idx: Int
-    let theme: BoardTheme
-
-    var body: some View {
-        Rectangle()
-            .fill(squareColor)
-            .aspectRatio(1, contentMode: .fill)
-    }
-
-    private var squareColor: Color {
-        let pos    = Chess.Position(idx)
-        let isDark = (pos.rank + pos.fileNumber) % 2 == 0
-        return isDark ? theme.dark : theme.light
+extension Piece {
+    /// Maps our Piece to the image name expected by PieceSetImageView.
+    var imageName: String {
+        let sidePrefix = side == .white ? "w" : "b"
+        return "\(sidePrefix)\(type.rawValue)"
     }
 }

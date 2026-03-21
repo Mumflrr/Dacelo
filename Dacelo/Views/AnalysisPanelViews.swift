@@ -58,20 +58,13 @@ struct AnalysisPanel: View {
             }
             if isExpanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    if let wdl = analysis.wdl { WDLBar(wdl: wdl) }
                     if let c = analysis.currentCharacteristics { playBadges(c) }
                     feedbackLabel(analysis.lastFeedback)
-                    if !analysis.currentPV.isEmpty {
-                        EngineLineView(label: "Best line", moves: analysis.currentPV, accentColor: .blue)
-                    }
-                    if let mw = analysis.mobilityWhite, let mb = analysis.mobilityBlack, mw + mb > 0 {
-                        MobilityBar(white: mw, black: mb)
-                    }
                     if let d = analysis.depth, let n = analysis.nodes {
                         DepthNodeFooter(depth: d, nodes: n)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .cardStyle(review: false)
@@ -403,7 +396,7 @@ struct WDLBar: View {
                 Text("B \(Int((wdl.black*100).rounded()))%").wdlLbl()
             }
         }
-        .animation(.easeInOut(duration:0.4),value:wdl.white)
+        .animation(nil, value: wdl.white)
     }
 }
 private extension Text { func wdlLbl() -> some View { font(.system(size:10,weight:.semibold,design:.monospaced)).foregroundStyle(.white.opacity(0.7)) } }

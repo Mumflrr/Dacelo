@@ -6,7 +6,6 @@
 // AnalysisPanelViews.swift — do not duplicate them here.
 
 import SwiftUI
-import Chess
 
 // MARK: - ContentView
 
@@ -233,8 +232,8 @@ struct ContentView: View {
     private var boardWithArrows: some View {
         ZStack {
             BoardLayout(boardTheme: game.boardTheme,
-                            pieceSet:   settings.pieceSet,
-                            isFlipped:  isFlipped)
+                        pieceSet:   settings.pieceSet,
+                        isFlipped:  isFlipped)
                 .environmentObject(game)
             BoardArrowOverlay(arrows: analysis.bestMoveArrows)
         }
@@ -334,7 +333,6 @@ struct ConnectionToolbarItem: View {
         Button {
             guard !isConnecting else { return }
             isConnecting = true
-            pulse = false
             Task {
                 app.connectToServer()
                 try? await Task.sleep(for: .seconds(1.5))
@@ -359,26 +357,19 @@ struct ConnectionToolbarItem: View {
             .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.0005), value: isConnecting)
-        .animation(.easeInOut(duration: 0.0005), value: connectionState.isConnected)
-        .onChange(of: isConnecting) { _, connecting in
-            pulse = connecting
-        }
+        .animation(.easeInOut(duration: 0.15), value: isConnecting)
+        .animation(.easeInOut(duration: 0.15), value: connectionState.isConnected)
+        .onChange(of: isConnecting) { _, connecting in pulse = connecting }
     }
 
     private var dotColor: Color {
-        if isConnecting { return .blue }
-        return connectionState.isConnected ? .green : .red
+        isConnecting ? .blue : connectionState.isConnected ? .green : .red
     }
-
     private var foregroundColor: Color {
-        if isConnecting { return .blue }
-        return connectionState.isConnected ? .secondary : .red
+        isConnecting ? .blue : connectionState.isConnected ? .secondary : .red
     }
-
     private var label: String {
-        if isConnecting { return "Connecting…" }
-        return connectionState.isConnected ? app.settings.serverHost : "Connect"
+        isConnecting ? "Connecting…" : connectionState.isConnected ? app.settings.serverHost : "Connect"
     }
 }
 

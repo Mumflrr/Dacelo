@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		7A5D333F2F4425AF00EB39F6 /* Chess in Frameworks */ = {isa = PBXBuildFile; productRef = 7A5D333E2F4425AF00EB39F6 /* Chess */; };
 		7A6EAE0F2F68B591005A30BE /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7A6EAE0E2F68B591005A30BE /* WebKit.framework */; };
 /* End PBXBuildFile section */
 
@@ -21,16 +20,19 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Assets.xcassets,
+				Chess/ChessBoard.swift,
+				Chess/ChessGame.swift,
+				Chess/ChessMoveGenerator.swift,
+				Chess/ChessRobot.swift,
 				DaceloApp.swift,
-				Engine/EngineModels.swift,
-				Engine/EngineService.swift,
-				Engine/LLMHookService.swift,
-				Engine/UCIRobot.swift,
+				Models/AppSettings.swift,
+				Models/EngineModels.swift,
 				Models/MoveCritique.swift,
 				Models/PositionCharacteristics.swift,
 				"Preview Content/Preview Assets.xcassets",
+				Services/EngineService.swift,
+				Services/LLMHookService.swift,
 				Stores/AnalysisStore.swift,
-				Stores/AppSettings.swift,
 				Stores/AppStore.swift,
 				Stores/GameStore.swift,
 				Views/AnalysisPanelViews.swift,
@@ -55,7 +57,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				7A6EAE0F2F68B591005A30BE /* WebKit.framework in Frameworks */,
-				7A5D333F2F4425AF00EB39F6 /* Chess in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -105,7 +106,6 @@
 			);
 			name = Dacelo;
 			packageProductDependencies = (
-				7A5D333E2F4425AF00EB39F6 /* Chess */,
 			);
 			productName = Dacelo;
 			productReference = 7A5D33292F4424BA00EB39F6 /* Dacelo.app */;
@@ -136,7 +136,6 @@
 			);
 			mainGroup = 7A5D33202F4424BA00EB39F6;
 			packageReferences = (
-				7A5D333D2F4425AF00EB39F6 /* XCRemoteSwiftPackageReference "swift-chess" */,
 			);
 			productRefGroup = 7A5D332A2F4424BA00EB39F6 /* Products */;
 			projectDirPath = "";
@@ -407,25 +406,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		7A5D333D2F4425AF00EB39F6 /* XCRemoteSwiftPackageReference "swift-chess" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/dpedley/swift-chess";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.8;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		7A5D333E2F4425AF00EB39F6 /* Chess */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 7A5D333D2F4425AF00EB39F6 /* XCRemoteSwiftPackageReference "swift-chess" */;
-			productName = Chess;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7A5D33212F4424BA00EB39F6 /* Project object */;
 }

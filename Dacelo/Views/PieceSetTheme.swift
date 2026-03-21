@@ -2,7 +2,6 @@
 // Dacelo
 
 import SwiftUI
-import Chess
 
 // MARK: - PieceSet
 
@@ -17,18 +16,8 @@ enum PieceSet: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String { rawValue.capitalized }
 
-    func fileName(for piece: Chess.Piece) -> String {
-        let t: String
-        switch piece.pieceType {
-        case .pawn:   t = "p"
-        case .knight: t = "n"
-        case .bishop: t = "b"
-        case .rook:   t = "r"
-        case .queen:  t = "q"
-        case .king:   t = "k"
-        default:      t = "p"
-        }
-        return t + colorCode(piece.side)
+    func fileName(for piece: Piece) -> String {
+        piece.type.rawValue + colorCode(piece.side)
     }
 
     func kingFileName(side: String) -> String {
@@ -39,7 +28,7 @@ enum PieceSet: String, CaseIterable, Identifiable {
         type + (side == "white" ? "w" : "b")
     }
 
-    private func colorCode(_ side: Chess.Side) -> String {
+    private func colorCode(_ side: Side) -> String {
         side == .white ? "w" : "b"
     }
 }
@@ -63,21 +52,6 @@ private final class PieceImageCache {
 }
 
 // MARK: - Bundle image loader
-//
-// macOS  → loads .svg  (NSImage handles SVG natively)
-// iOS    → loads .png  (converted from SVG at build time by the Run Script phase)
-//
-// Run Script (add BEFORE the Copy Bundle Resources phase, iOS target):
-//
-//   PIECES_SRC="${SRCROOT}/Dacelo/Pieces"
-//   PIECES_DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Pieces"
-//   find "$PIECES_SRC" -name "*.svg" | while read svg; do
-//     folder=$(basename "$(dirname "$svg")")
-//     name=$(basename "$svg" .svg)
-//     dst_dir="$PIECES_DST/$folder"
-//     mkdir -p "$dst_dir"
-//     sips -s format png "$svg" --out "$dst_dir/$name.png" 2>/dev/null
-//   done
 
 func bundlePieceImage(named name: String, inFolder folder: String) -> Image? {
     let key = "\(folder)/\(name)"
@@ -91,9 +65,7 @@ func bundlePieceImage(named name: String, inFolder folder: String) -> Image? {
         let ns  = NSImage(contentsOf: url)
     else { return nil }
     let image = Image(nsImage: ns)
-
     #else
-    // sips converts SVG → PNG preserving the filename stem.
     guard
         let url = Bundle.main.url(forResource: name,
                                   withExtension: "png",
@@ -123,7 +95,7 @@ private func unicodeGlyph(type: String, side: String) -> String {
 // MARK: - PieceSetImageView
 
 struct PieceSetImageView: View {
-    let piece: Chess.Piece
+    let piece:    Piece
     let pieceSet: PieceSet
 
     var body: some View {
@@ -136,25 +108,17 @@ struct PieceSetImageView: View {
     }
 
     private var unicodeFallback: String {
-        let t: String
-        switch piece.pieceType {
-        case .knight: t = "n"
-        case .bishop: t = "b"
-        case .rook:   t = "r"
-        case .queen:  t = "q"
-        case .king:   t = "k"
-        default:      t = "p"
-        }
-        return unicodeGlyph(type: t, side: piece.side == .white ? "white" : "black")
+        unicodeGlyph(type: piece.type.rawValue,
+                     side: piece.side == .white ? "white" : "black")
     }
 }
 
 // MARK: - PieceSetPieceView
 
 struct PieceSetPieceView: View {
-    let pieceType: String  // "p","n","b","r","q","k"
-    let side: String       // "white" | "black"
-    let pieceSet: PieceSet
+    let pieceType: String   // "p","n","b","r","q","k"
+    let side:      String   // "white" | "black"
+    let pieceSet:  PieceSet
 
     var body: some View {
         let name = pieceSet.pieceFileName(type: pieceType, side: side)
@@ -169,7 +133,7 @@ struct PieceSetPieceView: View {
 // MARK: - PieceSetKingView
 
 struct PieceSetKingView: View {
-    let side: String
+    let side:     String
     let pieceSet: PieceSet
 
     var body: some View {
@@ -178,19 +142,13 @@ struct PieceSetKingView: View {
 }
 
 // MARK: - PieceSetSwatch
-//
-// • Swatches are right-aligned (frame maxWidth: .infinity + trailing HStack).
-// • The tile has 2 px top padding so the selected border isn't clipped by the
-//   parent's overlay on both macOS and iOS.
-// • scaleEffect on the whole VStack matches BoardThemeSwatch exactly.
 
 struct PieceSetSwatch: View {
-    let pieceSet: PieceSet
+    let pieceSet:  PieceSet
     let isSelected: Bool
 
     var body: some View {
         VStack(spacing: 3) {
-            // 2 px top inset so the border renders fully without clipping.
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(isSelected ? Color.white.opacity(0.18) : Color.white.opacity(0.06))
@@ -205,7 +163,6 @@ struct PieceSetSwatch: View {
                         isSelected ? Color.white : Color.white.opacity(0.2),
                         lineWidth: isSelected ? 2 : 1
                     )
-                    // Offset the border rect down to match the 2 px top padding.
                     .padding(.top, 2)
             )
             .shadow(color: isSelected ? .white.opacity(0.3) : .clear, radius: 4)
@@ -215,7 +172,6 @@ struct PieceSetSwatch: View {
                 .foregroundStyle(isSelected ? .white : .white.opacity(0.45))
                 .lineLimit(1)
         }
-        // Fixed width so scale never shifts neighbours.
         .frame(width: 52)
         .scaleEffect(isSelected ? 1.12 : 1.0)
         .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isSelected)
