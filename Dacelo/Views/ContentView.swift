@@ -235,7 +235,6 @@ struct ContentView: View {
             BoardLayout(boardTheme: game.boardTheme,
                             pieceSet:   settings.pieceSet,
                             isFlipped:  isFlipped)
-                .environmentObject(game.displayChessStore)
                 .environmentObject(game)
             BoardArrowOverlay(arrows: analysis.bestMoveArrows)
         }
@@ -329,39 +328,57 @@ struct ConnectionToolbarItem: View {
     @EnvironmentObject var connectionState: EngineConnectionState
     @EnvironmentObject var app: AppStore
     @State private var isConnecting = false
+    @State private var pulse = false
 
     var body: some View {
         Button {
             guard !isConnecting else { return }
             isConnecting = true
+            pulse = false
             Task {
                 app.connectToServer()
-                // Give the connection time to settle before clearing the spinner
                 try? await Task.sleep(for: .seconds(1.5))
                 await MainActor.run { isConnecting = false }
             }
         } label: {
             HStack(spacing: 5) {
-                if isConnecting {
-                    ProgressView().controlSize(.mini).tint(.blue)
-                } else {
-                    Circle()
-                        .fill(connectionState.isConnected ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                }
-                Text(isConnecting ? "Connecting…"
-                     : connectionState.isConnected ? app.settings.serverHost : "Connect")
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: dotColor.opacity(pulse ? 0.9 : 0), radius: pulse ? 5 : 2)
+                    .animation(
+                        isConnecting
+                            ? .easeInOut(duration: 0.55).repeatForever(autoreverses: true)
+                            : .default,
+                        value: pulse
+                    )
+                Text(label)
                     .font(.caption.weight(connectionState.isConnected && !isConnecting ? .regular : .semibold))
             }
-            .foregroundStyle(
-                isConnecting ? .blue
-                    : connectionState.isConnected ? Color.secondary : Color.red
-            )
+            .foregroundStyle(foregroundColor)
             .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.2), value: isConnecting)
-        .animation(.easeInOut(duration: 0.2), value: connectionState.isConnected)
+        .animation(.easeInOut(duration: 0.0005), value: isConnecting)
+        .animation(.easeInOut(duration: 0.0005), value: connectionState.isConnected)
+        .onChange(of: isConnecting) { _, connecting in
+            pulse = connecting
+        }
+    }
+
+    private var dotColor: Color {
+        if isConnecting { return .blue }
+        return connectionState.isConnected ? .green : .red
+    }
+
+    private var foregroundColor: Color {
+        if isConnecting { return .blue }
+        return connectionState.isConnected ? .secondary : .red
+    }
+
+    private var label: String {
+        if isConnecting { return "Connecting…" }
+        return connectionState.isConnected ? app.settings.serverHost : "Connect"
     }
 }
 

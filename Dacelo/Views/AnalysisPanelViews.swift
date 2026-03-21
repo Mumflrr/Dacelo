@@ -38,20 +38,23 @@ import SwiftUI
 struct AnalysisPanel: View {
     @EnvironmentObject var analysis: AnalysisStore
     @EnvironmentObject var game:     GameStore
-    @State private var showingInfo = false
     @State private var isExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 engineBrainIcon(analyzing: analysis.isAnalysing, isReview: false)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Engine Analysis").font(.headline).foregroundStyle(.white)
-                    if analysis.isAnalysing { analysingLabel }
+                    if analysis.isAnalysing {
+                        analysingLabel(stage: analysis.analysisStage)
+                    }
                 }
-                Spacer()
-                if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
-                expandToggle($isExpanded)
+                Spacer(minLength: 0)
+                HStack(spacing: 6) {
+                    if let cp = analysis.scoreCP { ModernEvalBadge(scoreCP: cp) }
+                    expandToggle($isExpanded)
+                }
             }
             if isExpanded {
                 VStack(alignment: .leading, spacing: 10) {
@@ -64,7 +67,9 @@ struct AnalysisPanel: View {
                     if let mw = analysis.mobilityWhite, let mb = analysis.mobilityBlack, mw + mb > 0 {
                         MobilityBar(white: mw, black: mb)
                     }
-                    if let d = analysis.depth, let n = analysis.nodes { DepthNodeFooter(depth: d, nodes: n) }
+                    if let d = analysis.depth, let n = analysis.nodes {
+                        DepthNodeFooter(depth: d, nodes: n)
+                    }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
@@ -75,13 +80,21 @@ struct AnalysisPanel: View {
     @ViewBuilder private func playBadges(_ c: PositionCharacteristics) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                CharBadge(text: c.eval_stability,  icon: stabilityIcon(c.eval_stability),  color: stabilityColor(c.eval_stability))
-                CharBadge(text: c.position_type,   icon: positionTypeIcon(c.position_type), color: positionTypeColor(c.position_type))
-                CharBadge(text: c.line_type,       icon: lineTypeIcon(c.line_type),         color: .purple)
-            }.padding(.vertical, 2)
+                CharBadge(text: c.eval_stability,
+                          icon: stabilityIcon(c.eval_stability),
+                          color: stabilityColor(c.eval_stability))
+                CharBadge(text: c.position_type,
+                          icon: positionTypeIcon(c.position_type),
+                          color: positionTypeColor(c.position_type))
+                CharBadge(text: c.line_type,
+                          icon: lineTypeIcon(c.line_type),
+                          color: .purple)
+            }
+            .padding(.vertical, 2)
         }
     }
 }
+
 
 // ── Review-mode panel (full deep-dive, tabbed) ────────────────────────────
 
@@ -97,8 +110,7 @@ struct ReviewAnalysisPanel: View {
                 engineBrainIcon(analyzing: analysis.isAnalysing, isReview: true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Analysis Mode").font(.headline).foregroundStyle(.white)
-                    if analysis.isAnalysing {
-                        analysingLabel
+                    if analysis.isAnalysing { analysingLabel(stage: analysis.analysisStage)
                     } else if analysis.isReviewingHistory,
                               let idx = analysis.selectedCritiqueIndex,
                               analysis.moveCritiques.indices.contains(idx) {
@@ -163,9 +175,6 @@ struct ReviewAnalysisPanel: View {
     private var engineTab: some View {
         VStack(alignment: .leading, spacing: 10) {
             feedbackLabel(analysis.lastFeedback)
-            if !analysis.currentPV.isEmpty {
-                EngineLineView(label: "Best line", moves: analysis.currentPV, accentColor: .purple)
-            }
             if let d = analysis.depth, let n = analysis.nodes { DepthNodeFooter(depth: d, nodes: n) }
         }
     }
@@ -505,17 +514,59 @@ private extension View {
 // ── Shared subview helpers ─────────────────────────────────────────────────
 
 @ViewBuilder private func engineBrainIcon(analyzing: Bool, isReview: Bool) -> some View {
+    let color: Color = isReview ? .purple : .blue
     ZStack {
-        Circle().fill((isReview ? Color.purple : Color.blue).gradient.opacity(0.2)).frame(width:40,height:40)
+        Circle()
+            .fill(color.opacity(0.2))
+            .frame(width: 40, height: 40)
+        Circle()
+            .fill(color.opacity(analyzing ? 0.25 : 0))
+            .frame(width: 40, height: 40)
+            .scaleEffect(analyzing ? 1.5 : 1.0)
+            .animation(
+                analyzing
+                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                    : .easeInOut(duration: 0.2),
+                value: analyzing
+            )
         Image(systemName: isReview ? "chart.xyaxis.line" : "brain.head.profile")
-            .font(.title3).foregroundStyle((isReview ? Color.purple : Color.blue).gradient)
-            .rotationEffect(.degrees(analyzing ? 360 : 0))
-            .animation(analyzing ? .linear(duration:2).repeatForever(autoreverses:false) : .default, value:analyzing)
+            .font(.title3)
+            .foregroundStyle(color.gradient)
     }
 }
 
-private var analysingLabel: some View {
-    HStack(spacing:4) { ProgressView().controlSize(.mini).tint(.blue); Text("Analysing…").font(.caption).foregroundStyle(.white.opacity(0.7)) }
+@ViewBuilder private func analysingLabel(stage: AnalysisStore.AnalysisStage) -> some View {
+    HStack(spacing: 6) {
+        PulsingDot(color: .blue)
+        Text(analysingText(for: stage))
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.7))
+            .animation(.easeInOut(duration: 0.15), value: stage == .idle)
+    }
+}
+
+private struct PulsingDot: View {
+    let color: Color
+    @State private var pulse = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .shadow(color: color.opacity(pulse ? 0.9 : 0), radius: pulse ? 5 : 2)
+            .animation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { pulse = true }
+            .onDisappear { pulse = false }
+    }
+}
+
+private func analysingText(for stage: AnalysisStore.AnalysisStage) -> String {
+    switch stage {
+    case .idle:                return ""
+    case .evaluating:          return "Engine thinking…"
+    case .computingMetrics:    return "Computing metrics…"
+    case .generatingNarrative: return "Writing commentary…"
+    }
 }
 
 @ViewBuilder private func expandToggle(_ b: Binding<Bool>) -> some View {

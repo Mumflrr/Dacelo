@@ -47,6 +47,9 @@ final class AppStore: ObservableObject {
 
         ana.observe(game, settings: s)
         ana.observeScratch(game)
+
+        // Connect automatically on launch so the user never has to tap Connect manually.
+        Task { await eng.connect() }
     }
 
     // MARK: - Connection

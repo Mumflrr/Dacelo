@@ -16,6 +16,21 @@
 //   togglePause() sets robotController.isPaused.
 //   UCIRobot.evaluate() polls this and blocks in waitForManualMoveOrResume().
 //   User can drag/tap squares on the engine's behalf while paused.
+//
+// Scratch sideline architecture:
+//   beginScratchExploration() creates a fresh ChessStore from a historical FEN
+//   and transitions it to "playing" via gameAction(.startGame). Moves are
+//   accepted by the board but never recorded into moveCritiques.
+//
+//   Re-render bridge: BoardLayout only re-renders when a @Published property
+//   on GameStore changes. displayBoardFEN is the single published String that
+//   both the live-game sink and the scratch-game sink write to, giving
+//   BoardLayout a reliable reactive signal after every accepted move.
+//
+//   Threading: ChessStore.$game publishes on a background thread (the library's
+//   chess engine thread). Every sink that writes @Published properties MUST hop
+//   to the main queue via .receive(on: DispatchQueue.main). gameAction() itself
+//   is only ever called directly from @MainActor context.
 
 import Chess
 import SwiftUI
@@ -40,9 +55,6 @@ enum GameMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// True when deep analytics, NNUE breakdown, and LLM commentary are active.
-    /// In analysis mode the board accepts free moves from both sides and the
-    /// move history drawer doubles as a review navigator.
     var isAnalysis: Bool { self == .analysisOnly }
 }
 
@@ -108,40 +120,53 @@ final class GameStore: ObservableObject {
     @Published var boardTheme:  BoardTheme  = .brown
     @Published var isPaused:    Bool        = false
     @Published var currentFEN:  String      = ""
+
+    /// The single FEN string that BoardLayout observes for re-renders.
+    ///
+    /// Both the live-game Combine sink (in newGame()) and the scratch-game
+    /// Combine sink (in beginScratchExploration()) write here — always on the
+    /// main thread — so BoardLayout's onChange(of: gameStore.displayBoardFEN)
+    /// fires reliably after every accepted move in either context.
+    @Published var displayBoardFEN: String = ""
+
     /// When non-nil the board shows this FEN instead of the live game position.
-    /// Set by selectCritique() in AnalysisStore; cleared by clearPositionOverride().
     @Published var positionOverrideFEN: String? = nil
-    /// A temporary, standalone game used for exploring alternate lines from a
-    /// historical position. Moves made here never enter moveCritiques.
-    /// Nil when not in scratch exploration mode.
+    /// The UCI string of the last move played to reach positionOverrideFEN.
+    /// Used by beginScratchExploration to populate board.turns so
+    /// computeGameStatus() returns .active instead of .unknown.
+    @Published var positionOverrideLastMove: String? = nil
+
+    /// The scratch ChessStore for sideline exploration. Nil outside exploration.
+    /// AnalysisStore.observeScratch() watches this to detect when a new scratch
+    /// game starts and re-subscribes to analyse scratch moves.
     @Published var scratchChessStore: ChessStore? = nil
+
     /// True while the user is in the middle of a two-tap manual move for Leela.
-    /// Exposed so DaceloboardView can show a selection highlight on the first tap.
     @Published var manualSelectIdx: Int? = nil
 
-    /// The FEN the board should display: override when reviewing history, live otherwise.
-    var displayFEN: String { positionOverrideFEN ?? currentFEN }
-    /// True when the user is making moves in a historical scratch position.
-    var isExploringScratch: Bool { scratchChessStore != nil }
-    /// The ChessStore the board renders. Updated by showPosition(), clearPositionOverride(),
-    /// beginScratchExploration(), and endScratchExploration(). Always a stable reference
-    /// so SwiftUI's @EnvironmentObject injection stays consistent.
+    var displayFEN:         String { positionOverrideFEN ?? currentFEN }
+    var isExploringScratch: Bool   { scratchChessStore != nil }
+
+    /// The ChessStore the board renders. Always a stable @Published reference
+    /// so @EnvironmentObject injection stays consistent across mode switches.
     @Published var displayChessStore: ChessStore = ChessStore(game: Chess.Game(
         Chess.HumanPlayer(side: .white),
         against: Chess.HumanPlayer(side: .black)
     ))
 
-
     // MARK: - Robot controller
-    //
-    // One controller per game. Replaced on every newGame() so the old robot's
-    // thread sees isCancelled and exits cleanly.
 
     private(set) var robotController = RobotController()
 
     private let engine:   EngineService
     private let settings: AppSettings
+
+    /// Subscriptions for the live game. Cleared and rebuilt in newGame().
     private var cancellables: Set<AnyCancellable> = []
+
+    /// Subscription for the active scratch store's $game publisher.
+    /// Kept separate so tearing it down never disturbs the live-game sink.
+    private var scratchCancellables: Set<AnyCancellable> = []
 
     init(engine: EngineService, settings: AppSettings) {
         self.engine   = engine
@@ -160,22 +185,42 @@ final class GameStore: ObservableObject {
         if let robot = chessStore.game.white as? UCIRobot { robot.robotController?.isCancelled = true }
         robotController = RobotController()
 
-        isPaused       = false
+        isPaused        = false
         manualSelectIdx = nil
+
+        // Tear down ALL override/scratch state before replacing the live store.
+        // positionOverrideFEN must be cleared here — if newGame() is called while
+        // the user is browsing history, leaving it set means BoardLayout.handleTap
+        // sees positionOverrideFEN != nil on the very first tap and re-enters
+        // beginScratchExploration from the old historical FEN instead of passing
+        // the move to the new live game.
+        scratchCancellables.removeAll()
+        scratchChessStore   = nil
+        positionOverrideFEN = nil
 
         let (white, black) = makePlayers()
         let store = ChessStore(game: Chess.Game(white, against: black))
         applyTheme(to: store)
-        chessStore = store
+        chessStore        = store
         displayChessStore = store
-        currentFEN = store.game.board.FEN
+        currentFEN        = store.game.board.FEN
+        displayBoardFEN   = store.game.board.FEN
 
         cancellables.removeAll()
+
+        // Bridge live-game FEN changes to displayBoardFEN and currentFEN.
+        // .receive(on: DispatchQueue.main) is REQUIRED — ChessStore.$game
+        // publishes on the chess-engine background thread.
         chessStore.$game
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] g in
                 guard let self else { return }
-                DispatchQueue.main.async {
-                    self.currentFEN = g.board.FEN
+                let fen = g.board.FEN
+                self.currentFEN = fen
+                // Only update displayBoardFEN from the live sink when no scratch
+                // game is active — the scratch sink owns it during exploration.
+                if self.scratchChessStore == nil {
+                    self.displayBoardFEN = fen
                 }
             }
             .store(in: &cancellables)
@@ -185,16 +230,6 @@ final class GameStore: ObservableObject {
     }
 
     // MARK: - Pause / Resume
-    //
-    // Architecture (simplified from the previous player-swap approach):
-    //
-    // togglePause() only sets robotController.isPaused. The robot's evalutate()
-    // thread polls this flag and blocks in waitForManualMoveOrResume() when true.
-    //
-    // To play a move for Leela, the user taps two squares on the board.
-    // DaceloboardView detects this (because isPaused && isRobotsTurn) and calls
-    // submitManualMove(from:to:), depositing the move into the RobotController.
-    // The robot thread picks it up and returns it to the Chess library.
 
     func togglePause() {
         guard gameMode == .humanVsEngine else { return }
@@ -205,25 +240,19 @@ final class GameStore: ObservableObject {
             robotController.isPaused = true
         } else {
             robotController.isPaused = false
-            // Re-kick the game loop in case it's between moves.
             chessStore.gameAction(.startGame)
         }
     }
 
     // MARK: - Manual move for Leela
-    //
-    // Called from DaceloboardView when the user taps squares on Leela's behalf.
-    // Uses a two-tap sequence tracked here so we can publish the selection index.
 
     func handleManualTap(boardIdx: Int) {
         guard isPaused, gameMode == .humanVsEngine else { return }
 
         if let from = manualSelectIdx {
-            // Second tap — submit the move.
             manualSelectIdx = nil
             robotController.submitManualMove(from: from, to: boardIdx)
         } else {
-            // First tap — record selection.
             manualSelectIdx = boardIdx
         }
     }
@@ -237,10 +266,10 @@ final class GameStore: ObservableObject {
 
     // MARK: - Position override (history navigation)
 
-    /// Show a historical position on the board without affecting game state.
-    /// The board becomes read-only while an override is active — no moves accepted.
-    func showPosition(fen: String) {
-        positionOverrideFEN = fen
+    func showPosition(fen: String, lastMove: String? = nil) {
+        positionOverrideFEN      = fen
+        positionOverrideLastMove = lastMove
+        displayBoardFEN          = fen
         var game = Chess.Game(
             Chess.HumanPlayer(side: .white),
             against: Chess.HumanPlayer(side: .black)
@@ -251,16 +280,93 @@ final class GameStore: ObservableObject {
         displayChessStore = readOnly
     }
 
-    /// Return to the live game position, clearing any history override.
+    // MARK: - Scratch sideline exploration
+
+    @Published var isReplayingMoves: Bool = false  // kept for BoardLayout guard; always false
+
+    /// Begin sideline exploration from a historical position.
+    ///
+    /// The correct approach is simply: construct a Game with the target FEN
+    /// already set on its board, then wrap it in a ChessStore.
+    ///
+    /// ChessStore.init() does two things relevant here:
+    ///   1. Preserves a pre-populated board — it only calls resetBoard() if
+    ///      squares are empty, so our FEN position survives intact.
+    ///   2. Sets game.delegate = self, wiring processGameChanges so the store
+    ///      responds to userTappedSquare/userDropped normally.
+    ///
+    /// We do NOT call gameAction(.startGame). That action exists only to kick
+    /// off a robot's turn-polling loop. For human vs human, HumanPlayer responds
+    /// directly to user actions — no prior "start" call is needed or wanted.
+    /// Calling it would spawn a background Task (causing the Thread Performance
+    /// Checker warning) and set userPaused=true, blocking the first move.
+    func beginScratchExploration(targetFEN: String, lastMove: String? = nil) {
+        scratchCancellables.removeAll()
+
+        var game = Chess.Game(
+            Chess.HumanPlayer(side: .white),
+            against: Chess.HumanPlayer(side: .black)
+        )
+        game.board = Chess.Board(FEN: targetFEN, populateExpensiveVisuals: true)
+
+        // computeGameStatus() returns .unknown (blocking all taps) when
+        // board.lastMove is nil — i.e. board.turns is empty. We must populate
+        // turns with the real last move so the status resolves to .active.
+        if let uci = lastMove, uci.count >= 4 {
+            let fromStr = String(uci.prefix(2))
+            let toStr   = String(uci.dropFirst(2).prefix(2))
+            let from    = Chess.Position.from(rankAndFile: fromStr)
+            let to      = Chess.Position.from(rankAndFile: toStr)
+            let fenParts   = targetFEN.split(separator: " ")
+            let activeSide = fenParts.count > 1 && fenParts[1] == "b" ? Chess.Side.white : Chess.Side.black
+            let move = Chess.Move(side: activeSide, start: from, end: to)
+            game.appendLedger(move, pieceType: .pawn, captureType: nil)
+        }
+
+        let store = ChessStore(game: game)
+        applyTheme(to: store)
+        store.gameAction(.startGame)
+        applyTheme(to: store)
+
+        scratchChessStore = store
+        displayChessStore = store
+        displayBoardFEN   = targetFEN
+
+        store.$game
+            .receive(on: DispatchQueue.main)
+            .map { $0.board.FEN }
+            .removeDuplicates()
+            .sink { [weak self] newFEN in
+                guard let self, self.scratchChessStore != nil else { return }
+                self.displayBoardFEN = newFEN
+            }
+            .store(in: &scratchCancellables)
+    }
+
     func clearPositionOverride() {
-        positionOverrideFEN = nil
-        scratchChessStore   = nil
-        displayChessStore   = chessStore
+        print("CLEAR POSITION OVERRIDE called from: \(Thread.callStackSymbols[1])")
+        scratchCancellables.removeAll()
+        positionOverrideFEN      = nil
+        positionOverrideLastMove = nil
+        scratchChessStore        = nil
+        displayChessStore        = chessStore
+        displayBoardFEN          = currentFEN
+    }
+
+    func endScratchExploration() {
+        print("END SCRATCH called from: \(Thread.callStackSymbols[1])")
+        scratchCancellables.removeAll()
+        scratchChessStore = nil
+        if let fen = positionOverrideFEN {
+            showPosition(fen: fen)
+        } else {
+            displayChessStore = chessStore
+            displayBoardFEN   = currentFEN
+        }
     }
 
     // MARK: - Helpers
 
-    /// True when it is the Leela robot's turn to move.
     func isRobotsTurn() -> Bool {
         guard gameMode == .humanVsEngine else { return false }
         let parts = currentFEN.split(separator: " ")
@@ -268,31 +374,6 @@ final class GameStore: ObservableObject {
         let activeColor  = String(parts[1])
         let leelaIsBlack = playerColor == .white
         return leelaIsBlack ? activeColor == "b" : activeColor == "w"
-    }
-    
-    /// Load a scratch game from a FEN so the user can explore freely.
-    func beginScratchExploration(from fen: String) {
-        var game = Chess.Game(
-            Chess.HumanPlayer(side: .white),
-            against: Chess.HumanPlayer(side: .black)
-        )
-        game.board = Chess.Board(FEN: fen)
-        let store = ChessStore(game: game)
-        applyTheme(to: store)
-        store.gameAction(.startGame)
-        scratchChessStore  = store
-        displayChessStore  = store
-    }
-    
-    /// Disregard scratch game
-    func endScratchExploration() {
-        scratchChessStore = nil
-        // Return to the read-only history view if still reviewing, else live game
-        if let fen = positionOverrideFEN {
-            showPosition(fen: fen)   // rebuilds the read-only store into displayChessStore
-        } else {
-            displayChessStore = chessStore
-        }
     }
 
     // MARK: - Private
@@ -305,8 +386,6 @@ final class GameStore: ObservableObject {
                 ? (Chess.HumanPlayer(side: .white), robot)
                 : (robot, Chess.HumanPlayer(side: .black))
         case .humanVsHuman, .analysisOnly:
-            // Both modes use two human players. In analysisOnly the engine
-            // analyses every move but does not generate moves itself.
             return (Chess.HumanPlayer(side: .white),
                     Chess.HumanPlayer(side: .black))
         }

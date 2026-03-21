@@ -855,46 +855,50 @@ class ChessServer:
 
             eval_id = data.get("eval_engine", self.primary)
             move_id = data.get("best_move_engine", self.primary)
-            nnue_id = data.get("nnue_engine", "")   # only meaningful when deep=True
+            nnue_id = data.get("nnue_engine", "")
 
             eval_eng = self.engines.get(eval_id) or self.engines.get(self.primary)
             move_eng = self.engines.get(move_id) or self.engines.get(self.primary)
-
-            if eval_eng is None:
-                return {"type": "error", "message": f"eval_engine '{eval_id}' not found."}
-
-            # ── In analysis mode, run the primary eval engine AND the NNUE engine
-            # concurrently. The NNUE engine (typically Stockfish) is registered with
-            # capture_info_strings=True, so its analyse() call returns a populated
-            # `nnue` dict. We merge that into the primary result before sending.
-            # In regular play mode (deep=False) only the primary engine runs.
-
             nnue_eng = None
             if deep and nnue_id and nnue_id != eval_id:
                 nnue_eng = self.engines.get(nnue_id)
                 if nnue_eng is None:
-                    log.warning("nnue_engine '%s' not found — NNUE analysis skipped", nnue_id)
+                    log.warning("nnue_engine '%s' not found — NNUE skipped", nnue_id)
 
-            if nnue_eng is not None:
-                # Run both engines concurrently
-                async def _run_eval():
-                    async with eval_eng._lock:
-                        return await eval_eng.analyse(fen, movetime, deep=deep)
+            if eval_eng is None:
+                return {"type": "error", "message": f"eval_engine '{eval_id}' not found."}
 
-                async def _run_nnue():
-                    async with nnue_eng._lock:
-                        return await nnue_eng.analyse(fen, movetime)
-
-                result, nnue_result = await asyncio.gather(_run_eval(), _run_nnue())
-                result["nnue"] = nnue_result.get("nnue")
-            else:
+            # Build list of coroutines to run concurrently
+            async def _eval():
                 async with eval_eng._lock:
-                    result = await eval_eng.analyse(fen, movetime, deep=deep)
+                    return await eval_eng.analyse(fen, movetime, deep=deep)
+
+            async def _move():
+                async with move_eng._lock:
+                    return await move_eng.get_engine_move(fen, movetime)
+
+            async def _nnue():
+                async with nnue_eng._lock:
+                    return await nnue_eng.analyse(fen, movetime)
+
+            need_move = move_eng is not eval_eng
+            need_nnue = nnue_eng is not None
+
+            if need_move and need_nnue:
+                result, move_result, nnue_result = await asyncio.gather(_eval(), _move(), _nnue())
+                result["nnue"] = nnue_result.get("nnue")
+            elif need_move:
+                result, move_result = await asyncio.gather(_eval(), _move())
+            elif need_nnue:
+                result, nnue_result = await asyncio.gather(_eval(), _nnue())
+                result["nnue"] = nnue_result.get("nnue")
+                move_result = None
+            else:
+                result = await _eval()
+                move_result = None
 
             deep_score_cp = None
-            if move_eng is not eval_eng:
-                async with move_eng._lock:
-                    move_result = await move_eng.get_engine_move(fen, movetime)
+            if move_result is not None:
                 result["bestmove"]  = move_result.get("move")
                 result["from"]      = move_result.get("from", "")
                 result["to"]        = move_result.get("to", "")

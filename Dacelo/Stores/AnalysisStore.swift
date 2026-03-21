@@ -39,7 +39,13 @@ final class AnalysisStore: ObservableObject {
     /// Arrows shown on the board: index 0 = best (yellow), 1 = 2nd (cyan), 2 = 3rd (orange).
     @Published var bestMoveArrows:         [(from: String, to: String)]   = []
     @Published var isRequestingHint:       Bool                        = false
-    @Published var isAnalysing:            Bool                        = false
+    enum AnalysisStage {
+        case idle
+        case evaluating       // engine thinking
+        case computingMetrics // python-chess pawn/king/phase work
+        case generatingNarrative // LLM
+    }
+    @Published var analysisStage:          AnalysisStage               = .idle
     @Published var scoreCP:                Int?                        = nil
     @Published var wdl:                    WDLResponse?                = nil
     @Published var materialBalance:        Int?                        = nil
@@ -78,6 +84,7 @@ final class AnalysisStore: ObservableObject {
 
     var canGoBack:    Bool { !moveCritiques.isEmpty && (selectedCritiqueIndex ?? moveCritiques.count - 1) > 0 }
     var canGoForward: Bool { selectedCritiqueIndex != nil && selectedCritiqueIndex! < moveCritiques.count - 1 }
+    var isAnalysing: Bool { analysisStage != .idle }
 
     func goBack() {
         guard !moveCritiques.isEmpty else { return }
@@ -105,8 +112,15 @@ final class AnalysisStore: ObservableObject {
         selectedCritiqueIndex = index
         isReviewingHistory    = true
 
+        // If we're already in scratch exploration, tear it down before
+        // showing the new position — otherwise the old scratch store stays
+        // active and beginScratchExploration never runs for the new position.
+        if gameStore?.isExploringScratch == true {
+            gameStore?.endScratchExploration()
+        }
+
         // Restore board to the position after this move
-        gameStore?.showPosition(fen: critique.fen)
+        gameStore?.showPosition(fen: critique.fen, lastMove: critique.move)
 
         // Restore all analysis panel state from the snapshot
         let s = critique.snapshot
@@ -169,22 +183,26 @@ final class AnalysisStore: ObservableObject {
 
     // MARK: - Public API
 
-    // Call this ONCE from AppStore.init(), never again
+    // Call this ONCE from AppStore.init(), never again.
+    //
+    // Threading note: ChessStore.$game publishes on the chess-engine background
+    // thread. .receive(on: DispatchQueue.main) is required on every pipeline
+    // that consumes it to avoid the Thread Performance Checker priority-inversion
+    // warning and potential @MainActor data races.
     func observeScratch(_ gameStore: GameStore) {
         gameStore.$scratchChessStore
             .compactMap { $0 }
             .flatMap { $0.$game }
+            .receive(on: DispatchQueue.main)
             .removeDuplicates { $0.board.FEN == $1.board.FEN }
             .dropFirst()
             .sink { [weak self] game in
-                DispatchQueue.main.async {
-                    self?.handlePositionChange(game, appendToHistory: false)
-                }
+                self?.handlePositionChange(game, appendToHistory: false)
             }
-            .store(in: &scratchCancellables)  // separate cancellable set, never cleared
+            .store(in: &scratchCancellables)
     }
 
-    // observe() goes back to ONLY the main store subscription — exactly as it was before our changes
+    // observe() subscribes to the live game store only.
     func observe(_ gameStore: GameStore, settings: AppSettings? = nil, preserveHistory: Bool = false) {
         self.gameStore   = gameStore
         self.appSettings = settings
@@ -193,12 +211,11 @@ final class AnalysisStore: ObservableObject {
 
         gameStore.$chessStore
             .flatMap { $0.$game }
+            .receive(on: DispatchQueue.main)   // ← same threading fix as observeScratch
             .removeDuplicates { $0.board.FEN == $1.board.FEN }
             .dropFirst()
             .sink { [weak self] game in
-                DispatchQueue.main.async {
-                    self?.handlePositionChange(game, appendToHistory: true)
-                }
+                self?.handlePositionChange(game, appendToHistory: true)
             }
             .store(in: &cancellables)
     }
@@ -390,10 +407,9 @@ final class AnalysisStore: ObservableObject {
         appendToHistory: Bool
     ) async {
         
-        isAnalysing = true
-        defer { isAnalysing = false }
 
         do {
+            analysisStage = .evaluating
             let result = try await engine.analyse(
                 fen:            fen,
                 movetime:       appSettings?.evalTimeMs     ?? 2000,
@@ -402,7 +418,7 @@ final class AnalysisStore: ObservableObject {
                 nnueEngine:     nnueEngine,
                 deep:           isAnalysisMode
             )
-
+            analysisStage = .computingMetrics
             let fenParts      = fen.split(separator: " ").map(String.init)
             let activeColor   = fenParts.count > 1 ? fenParts[1] : "w"
             let normScore     = normalise(cp: result.score_cp, activeColor: activeColor)
@@ -574,8 +590,11 @@ final class AnalysisStore: ObservableObject {
                     LLMHookService.shared.requestNarrative(for: critique.id, context: ctx)
                 }
             }
+            analysisStage = .idle
+            
 
         } catch {
+            analysisStage = .idle
             print("[AnalysisStore] Analysis failed: \(error.localizedDescription)")
         }
     }

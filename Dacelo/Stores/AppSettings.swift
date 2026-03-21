@@ -6,7 +6,7 @@ import SwiftUI
 
 final class AppSettings: ObservableObject {
     @AppStorage("serverHost")        var serverHost:        String = "your-pc-hostname"
-    @AppStorage("serverPort")        var serverPort:        Int    = 8765
+    @AppStorage("serverPort")        var serverPort:        Int    = 1024
     @AppStorage("showBestMoveArrow") var showBestMoveArrow: Bool   = true
     @AppStorage("hintCount")         var hintCount:         Int    = 1
     @AppStorage("pieceSetName")      var pieceSetName:      String = "cburnett"
