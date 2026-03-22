@@ -158,32 +158,149 @@ struct ReviewAnalysisPanel: View {
 
     private var positionTab: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // WDL — win probability at a glance
             if let wdl = analysis.wdl { WDLBar(wdl: wdl) }
+
+            // Position characteristic badges
             if let c = analysis.currentCharacteristics { reviewBadges(c) }
-            if let mw = analysis.mobilityWhite, let mb = analysis.mobilityBlack, mw + mb > 0 {
-                MobilityBar(white: mw, black: mb)
-            }
-            if let nnue = analysis.nnue, !nnue.isEmpty {
-                NNUEBreakdownView(terms: nnue)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+
+            // Pawn structure — strategic context
             if analysis.pawnStructure != nil {
                 PawnStructureView().environmentObject(analysis)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.opacity)
             }
+
+            // King safety — tactical danger
             if analysis.kingAttackersWhite != nil || analysis.kingAttackersBlack != nil {
                 KingSafetyView().environmentObject(analysis)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .transition(.opacity)
             }
-            if let d = analysis.depth, let n = analysis.nodes { DepthNodeFooter(depth: d, nodes: n) }
+
+            if let d = analysis.depth, let n = analysis.nodes {
+                DepthNodeFooter(depth: d, nodes: n)
+            }
         }
     }
 
     private var engineTab: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            // Feedback summary
             feedbackLabel(analysis.lastFeedback)
-            if let d = analysis.depth, let n = analysis.nodes { DepthNodeFooter(depth: d, nodes: n) }
+
+            // Top 3 engine lines from selected critique's alternatives
+            if let idx = analysis.selectedCritiqueIndex,
+               analysis.moveCritiques.indices.contains(idx) {
+                let critique = analysis.moveCritiques[idx]
+                engineLinesSection(critique: critique)
+            } else if !analysis.currentPV.isEmpty {
+                // Fallback: show live PV when no critique selected
+                engineLineRow(rank: 1, move: nil, scoreCP: analysis.scoreCP, pv: analysis.currentPV, accentColor: .blue)
+            }
+
+            Divider().background(.white.opacity(0.08))
+
+            // Mobility bar
+            if let mw = analysis.mobilityWhite, let mb = analysis.mobilityBlack, mw + mb > 0 {
+                MobilityBar(white: mw, black: mb)
+            }
+
+            // NNUE breakdown — engine internals belong here
+            if let nnue = analysis.nnue, !nnue.isEmpty {
+                NNUEBreakdownView(terms: nnue)
+                    .transition(.opacity)
+            }
+
+            if let d = analysis.depth, let n = analysis.nodes {
+                DepthNodeFooter(depth: d, nodes: n)
+            }
         }
+    }
+
+    @ViewBuilder
+    private func engineLinesSection(critique: MoveCritique) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.blue.opacity(0.7))
+                Text("Engine Lines")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+            }
+
+            // Best move (rank 1) — the played move comparison
+            let bestPV = critique.suggestedLine
+            let bestCP = critique.scoreAfter
+            engineLineRow(rank: 1, move: nil, scoreCP: bestCP, pv: bestPV, accentColor: .blue)
+
+            // Top alternatives (ranks 2, 3)
+            ForEach(critique.alternatives.prefix(2)) { alt in
+                let color: Color = alt.rank == 2 ? .cyan : .purple
+                engineLineRow(rank: alt.rank, move: alt.move, scoreCP: alt.scoreCP, pv: alt.pv, accentColor: color)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func engineLineRow(rank: Int, move: String?, scoreCP: Int?, pv: [String], accentColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                // Rank badge
+                Text("\(rank)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accentColor)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(accentColor.opacity(0.15)))
+
+                // Move label
+                if let m = move {
+                    Text(formatUCI(m))
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+
+                Spacer()
+
+                // Score
+                if let cp = scoreCP {
+                    let pawns = Double(cp) / 100.0
+                    Text(String(format: "%+.2f", pawns))
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(cp > 20 ? .green : cp < -20 ? .red : .white.opacity(0.6))
+                }
+            }
+
+            // PV moves as scrollable chips
+            if !pv.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(pv.prefix(6).enumerated()), id: \.offset) { i, uci in
+                            Text(formatUCI(uci))
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(i == 0 ? 0.85 : 0.45))
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(i == 0 ? accentColor.opacity(0.15) : .white.opacity(0.04))
+                                )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func formatUCI(_ uci: String) -> String {
+        guard uci.count >= 4 else { return uci }
+        let from = String(uci.prefix(2))
+        let to   = String(uci.dropFirst(2).prefix(2))
+        let promo = uci.count > 4 ? "=\(uci.suffix(1).uppercased())" : ""
+        return "\(from)→\(to)\(promo)"
     }
 
     @ViewBuilder private func reviewBadges(_ c: PositionCharacteristics) -> some View {

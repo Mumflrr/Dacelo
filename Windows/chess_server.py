@@ -62,7 +62,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("chess_server")
 
-MULTI_PV = 3
+MULTI_PV = 5   # Top 5 moves — gives better position characteristics spread
+               # and richer alternatives for coaching context.
+               # move-only requests override this with multipv=1 per-call.
 
 
 # ── Position metrics (python-chess) ──────────────────────────────────────────
@@ -478,6 +480,7 @@ class UCIEngine:
         self._queue: asyncio.Queue = asyncio.Queue()
         self._loop:  Optional[asyncio.AbstractEventLoop] = None
         self._lock   = asyncio.Lock()   # serialise calls to this engine
+        self._is_pondering = False      # True while go ponder is active
 
     def start(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
@@ -540,12 +543,28 @@ class UCIEngine:
 
     # ── Public analysis API ──────────────────────────────────────────────────
 
-    async def get_engine_move(self, fen: str, movetime_ms: int = 3000) -> dict:
+    # Large but finite clock value used for "unlimited" game-clock mode.
+    # Engines see a legitimate remaining time and apply their own time
+    # management (including futile-search-aversion for lc0).
+    # In practice both Stockfish and lc0 stop within 1-3s on this budget.
+    _INFINITE_MS = 9_999_999
+
+    async def get_engine_move(self, fen: str, movetime_ms: int = 1000) -> dict:
         """
-        Return just the best move with basic eval.
-        FIX: now includes 'from', 'to', 'promotion' fields required by UCIRobot.
+        Request the engine's best move using go wtime/btime (not go movetime).
+
+        Using go wtime/btime instead of go movetime:
+          1. Unlocks the UCI pondering protocol — go ponder becomes available.
+          2. Lets the engine apply its own time management (futile-search-aversion
+             for lc0, aspiration window management for Stockfish). Both engines
+             stop naturally well within 1-3 seconds for typical positions.
+          3. Is semantically correct — we're in a game, not an analysis session.
+
+        movetime_ms is used as a hard cap via a server-side asyncio timeout,
+        so the engine never runs longer than the budget even if it doesn't
+        stop itself.
         """
-        result   = await self.analyse(fen, movetime_ms)
+        result   = await self._game_move(fen, movetime_ms)
         bestmove = result.get("bestmove")
         from_sq, to_sq, promotion = uci_to_parts(bestmove) if bestmove else ("", "", None)
         return {
@@ -559,24 +578,222 @@ class UCIEngine:
             "pv":         result.get("pv", []),
         }
 
-    async def analyse(self, fen: str, movetime_ms: int = 2000, deep: bool = False) -> dict:
+    async def _game_move(self, fen: str, movetime_ms: int) -> dict:
         """
-        Run a full MultiPV analysis. Caller MUST hold self._lock.
-        deep=True enables analysis-mode metrics (pawn structure, king safety).
+        Run go wtime/btime with a near-infinite clock, hard-capped by timeout.
+        Returns the raw mpv/bestmove result dict (same as analyse()).
+        Uses multipv=1 — move generation needs only the best move.
         """
         while not self._queue.empty():
             self._queue.get_nowait()
 
+        if 1 != MULTI_PV:
+            self._send("setoption name MultiPV value 1")
+
+        self._send(f"position fen {fen}")
+        # go wtime/btime: engine uses its own time management.
+        # We pass a large value so it runs freely, then cap with asyncio timeout.
+        self._send(
+            f"go wtime {self._INFINITE_MS} btime {self._INFINITE_MS} "
+            f"winc 0 binc 0"
+        )
+
+        mpv           = {}
+        best_depth    = 0
+        best_nodes    = 0
+        timeout       = movetime_ms / 1000.0 + 15.0
+        depth_evals: dict[int, int] = {}
+        final_wdl     = None
+
+        while True:
+            try:
+                line = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                log.error("[%s] timeout in _game_move (fen=%s)", self.name, fen)
+                self._send("stop")
+                raise
+
+            if line.startswith("info") and not line.startswith("info string"):
+                parts = line.split()
+                current_depth = None
+                try:
+                    if "depth" in parts:
+                        current_depth = int(parts[parts.index("depth") + 1])
+                        if current_depth > best_depth:
+                            best_depth = current_depth
+                    if "nodes" in parts:
+                        best_nodes = int(parts[parts.index("nodes") + 1])
+                except (ValueError, IndexError):
+                    pass
+                self._parse_info(line, mpv)
+                slot1 = mpv.get(1, {})
+                cp    = slot1.get("score_cp")
+                if cp is not None and current_depth is not None:
+                    depth_evals[current_depth] = cp
+                if slot1.get("wdl") is not None:
+                    final_wdl = slot1["wdl"]
+
+            elif line.startswith("bestmove"):
+                if 1 != MULTI_PV:
+                    self._send(f"setoption name MultiPV value {MULTI_PV}")
+                score_drift = self._compute_score_drift(list(depth_evals.values()))
+                return self._build_result(
+                    line, mpv, best_depth, best_nodes,
+                    score_drift, final_wdl, "",   # fen not needed for move result
+                    nnue=None, deep=False,
+                    shallow_score_cp=None,
+                )
+
+    # ── Pondering ────────────────────────────────────────────────────────────
+
+    async def start_ponder(self, fen: str, ponder_move: str):
+        """
+        Begin thinking on the opponent's expected reply.
+
+        UCI pondering protocol:
+          1. Send: position fen {fen} moves {ponder_move}
+          2. Send: go ponder wtime {N} btime {N} winc 0 binc 0
+          Engine searches indefinitely, expecting either ponderhit or stop.
+
+        ponder_move is the engine's predicted opponent reply (PV[1] from the
+        previous search). The engine thinks about the position after this move.
+        """
+        while not self._queue.empty():
+            self._queue.get_nowait()
+        self._is_pondering = True
+        self._send(f"position fen {fen} moves {ponder_move}")
+        self._send(
+            f"go ponder wtime {self._INFINITE_MS} btime {self._INFINITE_MS} "
+            f"winc 0 binc 0"
+        )
+        log.info("[%s] pondering after %s", self.name, ponder_move)
+
+    async def ponderhit(self, movetime_ms: int = 1000) -> dict:
+        """
+        Opponent played the predicted move — tell engine to switch to real search.
+        Sends 'ponderhit', then reads bestmove with the normal timeout.
+
+        The engine transitions from ponder mode to normal search immediately,
+        keeping all work accumulated during the ponder. This is the entire
+        benefit: that work is free, paid for by the opponent's think time.
+        """
+        self._is_pondering = False
+        self._send("ponderhit")
+        log.info("[%s] ponderhit — continuing search", self.name)
+
+        timeout = movetime_ms / 1000.0 + 15.0
+        mpv: dict[int, dict] = {}
+        best_depth = 0
+        best_nodes = 0
+        depth_evals: dict[int, int] = {}
+        final_wdl = None
+
+        while True:
+            try:
+                line = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                log.error("[%s] timeout after ponderhit", self.name)
+                self._send("stop")
+                raise
+
+            if line.startswith("info") and not line.startswith("info string"):
+                parts = line.split()
+                current_depth = None
+                try:
+                    if "depth" in parts:
+                        current_depth = int(parts[parts.index("depth") + 1])
+                        if current_depth > best_depth:
+                            best_depth = current_depth
+                    if "nodes" in parts:
+                        best_nodes = int(parts[parts.index("nodes") + 1])
+                except (ValueError, IndexError):
+                    pass
+                self._parse_info(line, mpv)
+                slot1 = mpv.get(1, {})
+                cp    = slot1.get("score_cp")
+                if cp is not None and current_depth is not None:
+                    depth_evals[current_depth] = cp
+                if slot1.get("wdl") is not None:
+                    final_wdl = slot1["wdl"]
+
+            elif line.startswith("bestmove"):
+                score_drift = self._compute_score_drift(list(depth_evals.values()))
+                result = self._build_result(
+                    line, mpv, best_depth, best_nodes,
+                    score_drift, final_wdl, "",
+                    nnue=None, deep=False, shallow_score_cp=None,
+                )
+                bestmove = result.get("bestmove")
+                from_sq, to_sq, promotion = uci_to_parts(bestmove) if bestmove else ("", "", None)
+                return {
+                    "type": "engine_move", "move": bestmove,
+                    "from": from_sq, "to": to_sq,
+                    "promotion": promotion,
+                    "score_cp":  result.get("score_cp"),
+                    "pv":        result.get("pv", []),
+                }
+
+    async def stop_ponder(self):
+        """
+        Opponent played a different move — discard the ponder and stop.
+        The engine returns a bestmove which we ignore; caller will send a
+        fresh engine_move request for the actual position.
+        """
+        if not self._is_pondering:
+            return
+        self._is_pondering = False
+        self._send("stop")
+        # Drain the bestmove response so the queue stays clean
+        try:
+            while True:
+                line = await asyncio.wait_for(self._queue.get(), timeout=3.0)
+                if line.startswith("bestmove"):
+                    break
+        except asyncio.TimeoutError:
+            pass
+        log.info("[%s] ponder stopped (wrong move played)", self.name)
+
+    async def analyse(
+        self,
+        fen:        str,
+        movetime_ms: int  = 2000,
+        deep:        bool = False,
+        multipv:     int  = MULTI_PV,
+    ) -> dict:
+        """
+        Run a MultiPV analysis. Caller MUST hold self._lock.
+        deep=True enables analysis-mode metrics (pawn structure, king safety).
+
+        depth_evals records one score per depth level (deduplicated) so that
+        score_drift correctly measures how much the evaluation changed during
+        search — not inflated by repeated MultiPV info lines at the same depth.
+
+        shallow_score_cp captures the score at the first depth ≥ 10, giving a
+        'shallow' reference point for the depth drift profile sent to the LLM.
+        The final score_cp is the 'deep' reference. The difference tells the
+        LLM whether this position is a mirage (collapses), deepening
+        (improves), stable, or sharp.
+        """
+        # Flush any stale output
+        while not self._queue.empty():
+            self._queue.get_nowait()
+
+        # Set MultiPV for this call (may differ from startup default for move requests)
+        if multipv != MULTI_PV:
+            self._send(f"setoption name MultiPV value {multipv}")
+
         self._send(f"position fen {fen}")
         self._send(f"go movetime {movetime_ms}")
 
-        mpv:         dict[int, dict] = {}
-        best_depth   = 0
-        best_nodes   = 0
-        timeout      = (movetime_ms / 1000.0) + 15.0
-        depth_evals: list[int] = []
-        final_wdl:   Optional[tuple[int, int, int]] = None
-        info_strings: list[str] = []
+        mpv:               dict[int, dict] = {}
+        best_depth         = 0
+        best_nodes         = 0
+        timeout            = (movetime_ms / 1000.0) + 15.0
+        # depth_evals: one entry per unique depth level (slot 1 only)
+        depth_evals:       dict[int, int]  = {}   # depth → score_cp
+        shallow_score_cp:  Optional[int]   = None  # score at first depth ≥ 10
+        final_wdl:         Optional[tuple[int, int, int]] = None
+        info_strings:      list[str]       = []
 
         while True:
             try:
@@ -592,11 +809,12 @@ class UCIEngine:
 
             elif line.startswith("info"):
                 parts = line.split()
+                current_depth = None
                 try:
                     if "depth" in parts:
-                        d = int(parts[parts.index("depth") + 1])
-                        if d > best_depth:
-                            best_depth = d
+                        current_depth = int(parts[parts.index("depth") + 1])
+                        if current_depth > best_depth:
+                            best_depth = current_depth
                     if "nodes" in parts:
                         best_nodes = int(parts[parts.index("nodes") + 1])
                 except (ValueError, IndexError):
@@ -604,19 +822,32 @@ class UCIEngine:
 
                 self._parse_info(line, mpv)
 
+                # Record depth→score for slot 1 only, deduplicated by depth.
+                # MultiPV emits multiple info lines per depth (one per PV slot)
+                # so without dedup the drift calculation is inflated.
                 slot1 = mpv.get(1, {})
-                if slot1.get("score_cp") is not None:
-                    depth_evals.append(slot1["score_cp"])
+                cp    = slot1.get("score_cp")
+                if cp is not None and current_depth is not None:
+                    depth_evals[current_depth] = cp
+                    # Capture shallow reference at first depth ≥ 10
+                    if shallow_score_cp is None and current_depth >= 10:
+                        shallow_score_cp = cp
+
                 if slot1.get("wdl") is not None:
                     final_wdl = slot1["wdl"]
 
             elif line.startswith("bestmove"):
-                score_drift = self._compute_score_drift(depth_evals)
-                nnue = parse_stockfish_eval(info_strings) if info_strings else None
+                # Restore global MultiPV if we changed it for this call
+                if multipv != MULTI_PV:
+                    self._send(f"setoption name MultiPV value {MULTI_PV}")
+
+                score_drift = self._compute_score_drift(list(depth_evals.values()))
+                nnue        = parse_stockfish_eval(info_strings) if info_strings else None
                 return self._build_result(
                     line, mpv, best_depth, best_nodes,
                     score_drift, final_wdl, fen,
-                    nnue=nnue, deep=deep
+                    nnue=nnue, deep=deep,
+                    shallow_score_cp=shallow_score_cp,
                 )
 
     # ── Parsing helpers ──────────────────────────────────────────────────────
@@ -671,15 +902,16 @@ class UCIEngine:
 
     def _build_result(
         self,
-        bestmove_line: str,
-        mpv:           dict,
-        depth:         int,
-        nodes:         int,
-        score_drift:   int,
-        final_wdl:     Optional[tuple],
-        fen:           str,
-        nnue:          Optional[dict],
-        deep:          bool = False,
+        bestmove_line:    str,
+        mpv:              dict,
+        depth:            int,
+        nodes:            int,
+        score_drift:      int,
+        final_wdl:        Optional[tuple],
+        fen:              str,
+        nnue:             Optional[dict],
+        deep:             bool = False,
+        shallow_score_cp: Optional[int] = None,
     ) -> dict:
         parts    = bestmove_line.split()
         bestmove = parts[1] if len(parts) > 1 else None
@@ -782,6 +1014,12 @@ class UCIEngine:
             "king_attackers_black": king_info.get("king_attackers_black"),
             "king_castled_white":   king_info.get("king_castled_white"),
             "king_castled_black":   king_info.get("king_castled_black"),
+            # Depth profile:
+            # shallow_score_cp = score at depth ~10 from THIS engine
+            # score_cp         = score at final depth from THIS engine
+            # The Swift side computes drift = score_cp - shallow_score_cp
+            # to classify: stable / deepening / mirage / sharp
+            "deep_score_cp":    shallow_score_cp,
         }
 
 
@@ -903,16 +1141,41 @@ class ChessServer:
                 result["from"]      = move_result.get("from", "")
                 result["to"]        = move_result.get("to", "")
                 result["promotion"] = move_result.get("promotion")
-                deep_score_cp       = move_result.get("score_cp")
+                # Note: deep_score_cp is already set inside _build_result from
+                # shallow_score_cp captured during the eval engine's own search.
+                # The move engine's score_cp is intentionally NOT used here —
+                # it comes from a different engine and cannot be compared to the
+                # eval engine's score_cp for depth drift purposes.
 
-            result["deep_score_cp"] = deep_score_cp
             return result
 
         elif cmd == "engine_move":
             fen      = data.get("fen", "")
-            movetime = int(data.get("movetime", 3000))
+            movetime = int(data.get("movetime", 1000))
             async with engine._lock:
                 return await engine.get_engine_move(fen, movetime)
+
+        elif cmd == "ponder":
+            # Begin pondering the predicted opponent reply.
+            # Does not hold the lock — ponder runs concurrently with
+            # the opponent's think time by design.
+            fen          = data.get("fen", "")
+            ponder_move  = data.get("ponder_move", "")
+            if not ponder_move:
+                return {"type": "error", "message": "ponder requires ponder_move"}
+            await engine.start_ponder(fen, ponder_move)
+            return {"type": "ok"}
+
+        elif cmd == "ponderhit":
+            # Opponent played the predicted move — convert ponder to real search.
+            movetime = int(data.get("movetime", 1000))
+            async with engine._lock:
+                return await engine.ponderhit(movetime)
+
+        elif cmd == "stop_ponder":
+            # Opponent played a different move — discard ponder results.
+            await engine.stop_ponder()
+            return {"type": "ok"}
 
         return {"type": "error", "message": f"Unknown command: {cmd}"}
 
@@ -1039,10 +1302,11 @@ async def main():
         await eng.wait_ready()
         eng.set_option("Threads", str(args.threads))
         eng.set_option("MultiPV", str(MULTI_PV))
+        # Enable pondering — allows the engine to think on the opponent's time.
+        # UCI standard: supported by all major engines (Stockfish, lc0, Komodo, etc.)
+        # Requires go wtime/btime instead of go movetime for game moves.
+        eng.set_option("UCI_Ponder", "true")
         if eng.capture_info_strings:
-            # Stockfish-like engine: enable NNUE eval output and WDL display.
-            # UCI_ShowWDL (Stockfish 15.1+) outputs empirically calibrated W/D/L
-            # probabilities — more useful for training than lc0's self-play WDL.
             eng.set_option("Use NNUE", "true")
             eng.set_option("UCI_ShowWDL", "true")
         log.info("Engine '%s' ready", name)

@@ -100,7 +100,11 @@ final class GameStore: ObservableObject {
     private let engine:    EngineService
     private let settings:  AppSettings
     private var robot:     ChessRobot?
-    private var robotTask: Task<Void, Never>?
+    private var robotTask:    Task<Void, Never>?
+    // Pondering state — the FEN after the robot's last move and the
+    // predicted opponent reply (PV[1] from the engine's search).
+    private var ponderFEN:    String? = nil
+    private var ponderMove:   String? = nil
     // Forwards ChessClock.objectWillChange into GameStore.objectWillChange so
     // ContentView (which observes GameStore) re-renders on every clock tick.
     private var clockCancellable: AnyCancellable?
@@ -152,7 +156,9 @@ final class GameStore: ObservableObject {
                 side:           playerColor.opposite.side,
                 engine:         engine,
                 moveTimeMs:     settings.moveTimeMs,
-                bestMoveEngine: settings.bestMoveEngine
+                bestMoveEngine: settings.bestMoveEngine,
+                difficulty:     settings.difficulty,
+                openingMoves:   settings.openingMovesDepth
             )
             Task { @MainActor in self.kickRobotIfNeeded() }
         } else {
@@ -177,6 +183,7 @@ final class GameStore: ObservableObject {
             let moved = game.handleTap(at: index) != nil
             if moved {
                 clock.switchTurn(movedSide: side)
+                handleHumanMoveForPonder(playedUCI: game.history.last?.move.uci)
                 kickRobotIfNeeded()
             }
         }
@@ -210,10 +217,29 @@ final class GameStore: ObservableObject {
             let moved = game.handleDrop(to: index) != nil
             if moved {
                 clock.switchTurn(movedSide: side)
+                handleHumanMoveForPonder(playedUCI: game.history.last?.move.uci)
                 kickRobotIfNeeded()
             }
         }
     }
+
+    // MARK: - Ponder
+
+    private func handleHumanMoveForPonder(playedUCI: String?) {
+        guard let pm = ponderMove, ponderFEN != nil else { return }
+        ponderMove = nil; ponderFEN = nil
+        if let played = playedUCI, played == pm {
+            pendingPonderHit = true
+        } else {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.engine.stopPonder(engine: self.settings.bestMoveEngine)
+            }
+        }
+    }
+
+    private var pendingPonderHit: Bool    = false
+    private var pendingPonderFEN: String? = nil
 
     // MARK: - History navigation
 
@@ -340,14 +366,34 @@ final class GameStore: ObservableObject {
               let robot
         else { return }
 
-        let board = game.board
+        let board            = game.board
+        let usePonderHit     = pendingPonderHit
+        pendingPonderHit     = false
+        pendingPonderFEN     = nil
+        let bestMoveEngine   = settings.bestMoveEngine
+        let moveTimeMs       = settings.moveTimeMs
 
         robotTask = Task { [weak self] in
-            let result = await robot.think(board: board)
+            guard let self else { return }
+
+            // If the human played the predicted move, cash in the ponder work
+            let result: (from: BoardIndex, to: BoardIndex, promotion: PieceType?)?
+            if usePonderHit {
+                result = await robot.thinkWithPonderHit(
+                    engine:         self.engine,
+                    bestMoveEngine: bestMoveEngine,
+                    moveTimeMs:     moveTimeMs
+                )
+            } else {
+                result = await robot.think(board: board)
+            }
+
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard let self, let result else {
+                    self?.robotTask = nil
+                    return
+                }
                 self.robotTask = nil
-                guard let result else { return }
                 let robotSide = self.game.board.activeSide
                 let applied   = self.game.applyRobotMove(
                     from:      result.from,
@@ -356,6 +402,23 @@ final class GameStore: ObservableObject {
                 )
                 if applied {
                     self.clock.switchTurn(movedSide: robotSide)
+
+                    // Fire ponder on the predicted human reply (PV[1])
+                    // after the robot's move is applied.
+                    // If the robot has a stored ponder candidate, use it.
+                    if let pFen = robot.lastPonderFEN,
+                       let pMove = robot.lastPonderMove {
+                        self.ponderFEN  = pFen
+                        self.ponderMove = pMove
+                        Task {
+                            await self.engine.ponder(
+                                fen:        pFen,
+                                ponderMove: pMove,
+                                engine:     bestMoveEngine
+                            )
+                        }
+                    }
+
                     self.kickRobotIfNeeded()
                 }
             }

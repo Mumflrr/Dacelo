@@ -706,6 +706,30 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented).frame(maxWidth: 160)
                 }
+                Divider().background(.white.opacity(0.1))
+                SettingsRow(label: "Play strength") {
+                    HStack(spacing: 10) {
+                        Slider(value: Binding(
+                            get: { Double(settings.difficultyPct) },
+                            set: { settings.difficultyPct = Int($0) }
+                        ), in: 0...100, step: 5)
+                        .frame(maxWidth: 160).accentColor(.purple)
+                        Text(DifficultyProfile(difficulty: settings.difficulty).label)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.purple)
+                            .frame(width: 90, alignment: .leading)
+                    }
+                }
+                Divider().background(.white.opacity(0.1))
+                SettingsRow(label: "Opening moves") {
+                    HStack(spacing: 10) {
+                        Stepper("", value: $settings.openingMovesDepth, in: 0...20, step: 2)
+                            .labelsHidden()
+                        Text("\(settings.openingMovesDepth) moves")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
             }
             Divider().background(.white.opacity(0.1))
             SettingsRow(label: "Time control") {
@@ -748,8 +772,9 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    .padding(.horizontal, 2)
                 }
-                .frame(maxWidth: 320, alignment: .trailing)
+                .frame(maxWidth: 430)
             }
         }
     }
@@ -845,7 +870,7 @@ struct SettingsView: View {
 
             Divider().background(.white.opacity(0.1))
 
-            SettingsRow(label: "Move think time") {
+            SettingsRow(label: "Engine depth") {
                 HStack(spacing: 10) {
                     Slider(value: Binding(
                         get: { Double(settings.moveTimeMs) },
@@ -863,7 +888,7 @@ struct SettingsView: View {
 
             Divider().background(.white.opacity(0.1))
 
-            SettingsRow(label: "Eval think time") {
+            SettingsRow(label: "Eval depth") {
                 HStack(spacing: 10) {
                     Slider(value: Binding(
                         get: { Double(settings.evalTimeMs) },
@@ -877,6 +902,21 @@ struct SettingsView: View {
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 44, alignment: .trailing)
                 }
+            }
+
+            // Disclaimer — shown only when either slider is moved above 2s
+            if settings.moveTimeMs > 2000 || settings.evalTimeMs > 2000 {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange.opacity(0.7))
+                        .padding(.top, 1)
+                    Text("1 second is enough for Stockfish and Leela on modern hardware. Higher values are only meaningful for engines with very slow evaluation networks or if you need tournament-level precision.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 2)
             }
 
             Text("Move engine plays your opponent. Eval engine analyses every position — use Stockfish for full NNUE breakdowns.")
@@ -962,6 +1002,18 @@ struct SettingsView: View {
                     Picker("Play as", selection: $game.playerColor) {
                         ForEach(PlayerColor.allCases) { color in Text(color.rawValue).tag(color) }
                     }.pickerStyle(.segmented)
+                    HStack {
+                        Text("Difficulty")
+                        Spacer()
+                        Text(DifficultyProfile(difficulty: settings.difficulty).label)
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { Double(settings.difficultyPct) },
+                        set: { settings.difficultyPct = Int($0) }
+                    ), in: 0...100, step: 5)
+                    Stepper("Opening moves: \(settings.openingMovesDepth)",
+                            value: $settings.openingMovesDepth, in: 0...20, step: 2)
                 }
                 Picker("Time control", selection: $settings.timeControlIndex) {
                     ForEach(TimeControl.presets.indices, id: \.self) { i in

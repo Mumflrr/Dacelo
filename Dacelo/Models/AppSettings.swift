@@ -14,7 +14,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("evalEngine")        var evalEngine:        String = "stockfish"
     @AppStorage("bestMoveEngine")    var bestMoveEngine:    String = "lc0"
     @AppStorage("nnueEngine")        var nnueEngine:        String = "stockfish"
-    @AppStorage("moveTimeMs")        var moveTimeMs:        Int    = 3000
+    @AppStorage("moveTimeMs")        var moveTimeMs:        Int    = 1000
     @AppStorage("evalTimeMs")        var evalTimeMs:        Int    = 2000
 
     // ── Available engines (populated from server on connect) ──────────────────
@@ -32,6 +32,19 @@ final class AppSettings: ObservableObject {
         get { TimeControl.presets[min(timeControlIndex, TimeControl.presets.count - 1)] }
         set { timeControlIndex = TimeControl.presets.firstIndex(of: newValue) ?? 0 }
     }
+
+    // ── Difficulty ────────────────────────────────────────────────────────────
+    // 0.0 = complete beginner (random legal moves, ignores engine)
+    // 1.0 = full engine strength (always plays best move)
+    // Stored as Int (0–100) so @AppStorage can handle it.
+    @AppStorage("difficultyPct")     var difficultyPct:     Int    = 80
+
+    var difficulty: Double { Double(difficultyPct) / 100.0 }
+
+    // Number of opening moves where book randomisation applies.
+    // At high difficulty the engine plays the book correctly.
+    // At low difficulty it plays random legal moves in the opening.
+    @AppStorage("openingMovesDepth") var openingMovesDepth: Int    = 8
 
     var pieceSet: PieceSet { PieceSet(rawValue: pieceSetName) ?? .cburnett }
 }

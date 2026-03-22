@@ -146,12 +146,9 @@ actor EngineService: NSObject {
     }
 
     /// Request the engine's best move for a position.
-    ///
-    // FIX: was missing bestMoveEngine parameter — UCIRobot called it with
-    // engine.engineMove(fen:movetime:bestMoveEngine:) → compile error.
     func engineMove(
         fen:            String,
-        movetime:       Int    = 3000,
+        movetime:       Int    = 1000,
         bestMoveEngine: String = "primary"
     ) async throws -> EngineMoveResponse {
         let data = try await request(
@@ -167,6 +164,64 @@ actor EngineService: NSObject {
         let result = try decode(EngineMoveResponse.self, from: data)
         if result.type == "error" { throw EngineError.serverError(result.message ?? "unknown") }
         return result
+    }
+
+    // MARK: - Pondering
+
+    /// Begin pondering the engine's predicted opponent reply.
+    ///
+    /// Call this immediately after the robot plays a move, passing the first
+    /// move of the engine's PV as `ponderMove`. The engine starts thinking
+    /// about the position after that predicted reply — on the opponent's time.
+    ///
+    /// Fire and forget — no response expected. The engine runs freely until
+    /// `ponderhit()` or `stopPonder()` is called.
+    func ponder(
+        fen:         String,
+        ponderMove:  String,
+        engine:      String = "primary"
+    ) async {
+        try? await sendJSON([
+            "cmd":          "ponder",
+            "fen":          fen,
+            "ponder_move":  ponderMove,
+            "engine":       engine,
+        ])
+        // Response is {"type":"ok"} — consumed by route() and discarded
+    }
+
+    /// Opponent played the predicted move — convert ponder to real search.
+    ///
+    /// The engine immediately transitions from ponder mode, keeping all
+    /// accumulated work. Returns the best move with the same shape as
+    /// `engineMove()`.
+    func ponderhit(
+        movetime:       Int    = 1000,
+        bestMoveEngine: String = "primary"
+    ) async throws -> EngineMoveResponse {
+        let data = try await request(
+            [
+                "cmd":      "ponderhit",
+                "movetime": movetime,
+                "engine":   bestMoveEngine,
+            ],
+            expectedTypes: ["engine_move"],
+            timeout: Double(movetime) / 1000.0 + 15.0
+        )
+        let result = try decode(EngineMoveResponse.self, from: data)
+        if result.type == "error" { throw EngineError.serverError(result.message ?? "unknown") }
+        return result
+    }
+
+    /// Opponent played a different move than predicted — discard ponder.
+    ///
+    /// Call this before issuing a fresh `engineMove()` for the actual position.
+    /// Fire and forget — the server stops the engine and drains its output.
+    func stopPonder(engine: String = "primary") async {
+        try? await sendJSON([
+            "cmd":    "stop_ponder",
+            "engine": engine,
+        ])
     }
 
     func newGame() async {
