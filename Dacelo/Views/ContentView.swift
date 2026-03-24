@@ -763,18 +763,13 @@ struct SettingsView: View {
             }
             Divider().background(.white.opacity(0.1))
             SettingsRow(label: "Pieces") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(PieceSet.allCases) { set in
-                            PieceSetSwatch(pieceSet: set,
-                                           isSelected: settings.pieceSet == set)
-                                .onTapGesture { settings.pieceSetName = set.rawValue }
-                        }
+                HStack(spacing: 8) {
+                    ForEach(PieceSet.allCases) { set in
+                        PieceSetSwatch(pieceSet: set,
+                                       isSelected: settings.pieceSet == set)
+                            .onTapGesture { settings.pieceSetName = set.rawValue }
                     }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 2)
                 }
-                .frame(maxWidth: 430)
             }
         }
     }
