@@ -65,4 +65,4 @@ fastlane/test_output
 
 .vscode/
 
-windows/lc0_server.log
+windows/chess_server.log
