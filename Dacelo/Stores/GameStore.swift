@@ -76,7 +76,7 @@ final class GameStore: ObservableObject {
     @Published var gameMode:            GameMode    = .humanVsEngine
     @Published var playerColor:         PlayerColor = .white
     @Published var boardTheme:          BoardTheme  = .brown
-    @Published var isPaused:            Bool        = false
+    // isPaused removed — pause functionality removed
     @Published var reviewGame:          ChessGame?  = nil
     @Published var scratchGame:         ChessGame?  = nil
     @Published var manualRobotSelectIdx: Int?       = nil
@@ -100,11 +100,16 @@ final class GameStore: ObservableObject {
     private let engine:    EngineService
     private let settings:  AppSettings
     private var robot:     ChessRobot?
+<<<<<<< Updated upstream
     private var robotTask:    Task<Void, Never>?
     // Pondering state — the FEN after the robot's last move and the
     // predicted opponent reply (PV[1] from the engine's search).
     private var ponderFEN:    String? = nil
     private var ponderMove:   String? = nil
+=======
+    private var robotTask:  Task<Void, Never>?
+    private var ponderMove: String? = nil  // predicted human reply after robot moves
+>>>>>>> Stashed changes
     // Forwards ChessClock.objectWillChange into GameStore.objectWillChange so
     // ContentView (which observes GameStore) re-renders on every clock tick.
     private var clockCancellable: AnyCancellable?
@@ -125,13 +130,16 @@ final class GameStore: ObservableObject {
 
     func newGame() {
         cancelRobot()
+        ponderMove           = nil
         reviewGame           = nil
         scratchGame          = nil
         scratchHistoryIndex  = nil
-        isPaused             = false
         manualRobotSelectIdx = nil
         startNewGame()
-        Task { await engine.newGame() }
+        Task {
+            await engine.stopPonder()
+            await engine.newGame()
+        }
     }
 
     private func startNewGame() {
@@ -169,10 +177,6 @@ final class GameStore: ObservableObject {
     // MARK: - Board interaction
 
     func handleTap(at index: Int) {
-        if isPaused && isRobotsTurn {
-            handleManualRobotTap(at: index)
-            return
-        }
         if isExploringScratch {
             scratchGame?.handleTap(at: index)
         } else if isReviewingHistory {
@@ -183,16 +187,17 @@ final class GameStore: ObservableObject {
             let moved = game.handleTap(at: index) != nil
             if moved {
                 clock.switchTurn(movedSide: side)
+<<<<<<< Updated upstream
                 handleHumanMoveForPonder(playedUCI: game.history.last?.move.uci)
+=======
+                handleHumanMoved()
+>>>>>>> Stashed changes
                 kickRobotIfNeeded()
             }
         }
     }
 
     func handleDragStart(at index: Int) -> Bool {
-        if isPaused && isRobotsTurn {
-            return game.board.squares[index]?.side == playerColor.opposite.side
-        }
         if isExploringScratch {
             return scratchGame?.handleDragStart(at: index) ?? false
         } else if isReviewingHistory {
@@ -204,12 +209,6 @@ final class GameStore: ObservableObject {
     }
 
     func handleDrop(at index: Int) {
-        if isPaused && isRobotsTurn {
-            guard let from = manualRobotSelectIdx else { return }
-            manualRobotSelectIdx = nil
-            robot?.controller.submitManualMove(from: from, to: index)
-            return
-        }
         if isExploringScratch {
             scratchGame?.handleDrop(to: index)
         } else {
@@ -217,7 +216,11 @@ final class GameStore: ObservableObject {
             let moved = game.handleDrop(to: index) != nil
             if moved {
                 clock.switchTurn(movedSide: side)
+<<<<<<< Updated upstream
                 handleHumanMoveForPonder(playedUCI: game.history.last?.move.uci)
+=======
+                handleHumanMoved()
+>>>>>>> Stashed changes
                 kickRobotIfNeeded()
             }
         }
@@ -299,20 +302,7 @@ final class GameStore: ObservableObject {
         return current < scratch.history.count - 1
     }
 
-    // MARK: - Pause / Resume
-
-    func togglePause() {
-        guard gameMode == .humanVsEngine else { return }
-        isPaused.toggle()
-        manualRobotSelectIdx = nil
-        robot?.controller.isPaused = isPaused
-        if isPaused {
-            clock.pause()
-        } else {
-            clock.resume()
-            kickRobotIfNeeded()
-        }
-    }
+    // Pause functionality removed
 
     // MARK: - Board theme
 
@@ -346,26 +336,34 @@ final class GameStore: ObservableObject {
         return (white: sort(whiteCaptured), black: sort(blackCaptured))
     }
 
-    // MARK: - Robot loop
+    // MARK: - Ponder
 
-    private func handleManualRobotTap(at index: Int) {
-        if let from = manualRobotSelectIdx {
-            manualRobotSelectIdx = nil
-            robot?.controller.submitManualMove(from: from, to: index)
-        } else if game.board.squares[index]?.side == playerColor.opposite.side {
-            manualRobotSelectIdx = index
+    private func handleHumanMoved() {
+        guard let pm = ponderMove else { return }
+        let playedUCI = game.history.last?.move.uci
+        ponderMove = nil
+        let bme = settings.bestMoveEngine
+        if playedUCI == pm {
+            // Human played the predicted move — ponderhit
+            pendingPonderHit = true
+        } else {
+            Task { await engine.stopPonder(engine: bme) }
         }
     }
 
+    private var pendingPonderHit: Bool = false
+
+    // MARK: - Robot loop
+
     private func kickRobotIfNeeded() {
         guard gameMode == .humanVsEngine,
-              !isPaused,
               isRobotsTurn,
               game.status == .active || game.status == .check,
               robotTask == nil,
               let robot
         else { return }
 
+<<<<<<< Updated upstream
         let board            = game.board
         let usePonderHit     = pendingPonderHit
         pendingPonderHit     = false
@@ -393,15 +391,27 @@ final class GameStore: ObservableObject {
                     self?.robotTask = nil
                     return
                 }
+=======
+        let board          = game.board
+        let usePonderHit   = pendingPonderHit
+        let currentFEN     = game.board.fen
+        pendingPonderHit   = false
+        let bme            = settings.bestMoveEngine
+        let mt             = settings.moveTimeMs
+
+        robotTask = Task { [weak self] in
+            guard let self else { return }
+            let result = await robot.think(board: board)
+            await MainActor.run { [weak self] in
+                guard let self, let result else { self?.robotTask = nil; return }
+>>>>>>> Stashed changes
                 self.robotTask = nil
                 let robotSide = self.game.board.activeSide
                 let applied   = self.game.applyRobotMove(
-                    from:      result.from,
-                    to:        result.to,
-                    promotion: result.promotion
-                )
+                    from: result.from, to: result.to, promotion: result.promotion)
                 if applied {
                     self.clock.switchTurn(movedSide: robotSide)
+<<<<<<< Updated upstream
 
                     // Fire ponder on the predicted human reply (PV[1])
                     // after the robot's move is applied.
@@ -419,6 +429,15 @@ final class GameStore: ObservableObject {
                         }
                     }
 
+=======
+                    // Fire ponder on predicted human reply using post-move FEN
+                    if let pm = robot.lastPonderMove {
+                        let postFEN = self.game.board.fen
+                        self.ponderMove = pm
+                        Task { await self.engine.ponder(
+                            fen: postFEN, ponderMove: pm, engine: bme) }
+                    }
+>>>>>>> Stashed changes
                     self.kickRobotIfNeeded()
                 }
             }
@@ -427,9 +446,14 @@ final class GameStore: ObservableObject {
 
     private func cancelRobot() {
         robotTask?.cancel()
-        robotTask = nil
+        robotTask      = nil
+        ponderMove     = nil
+        pendingPonderHit = false
         let r = robot
-        robot   = nil
-        Task { await r?.cancel() }
+        robot = nil
+        Task {
+            await self.engine.stopPonder()
+            await r?.cancel()
+        }
     }
 }

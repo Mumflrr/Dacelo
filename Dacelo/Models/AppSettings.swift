@@ -5,7 +5,7 @@ import SwiftUI
 
 final class AppSettings: ObservableObject {
     @AppStorage("serverHost")        var serverHost:        String = "your-pc-hostname"
-    @AppStorage("serverPort")        var serverPort:        Int    = 1024
+    @AppStorage("serverPort")        var serverPort:        Int    = 8765
     @AppStorage("showBestMoveArrow") var showBestMoveArrow: Bool   = true
     @AppStorage("hintCount")         var hintCount:         Int    = 1
     @AppStorage("pieceSetName")      var pieceSetName:      String = "cburnett"
@@ -33,6 +33,7 @@ final class AppSettings: ObservableObject {
         set { timeControlIndex = TimeControl.presets.firstIndex(of: newValue) ?? 0 }
     }
 
+<<<<<<< Updated upstream
     // ── Difficulty ────────────────────────────────────────────────────────────
     // 0.0 = complete beginner (random legal moves, ignores engine)
     // 1.0 = full engine strength (always plays best move)
@@ -46,5 +47,14 @@ final class AppSettings: ObservableObject {
     // At low difficulty it plays random legal moves in the opening.
     @AppStorage("openingMovesDepth") var openingMovesDepth: Int    = 8
 
+=======
+    // ── Difficulty ───────────────────────────────────────────────────────────
+    // 0 = Beginner (random play), 100 = full engine strength.
+    // Stored as Int so @AppStorage handles it; exposed as Double via `difficulty`.
+    @AppStorage("difficultyPct")     var difficultyPct:     Int    = 80
+    @AppStorage("openingMovesDepth") var openingMovesDepth: Int    = 8
+
+    var difficulty: Double { Double(difficultyPct) / 100.0 }
+>>>>>>> Stashed changes
     var pieceSet: PieceSet { PieceSet(rawValue: pieceSetName) ?? .cburnett }
 }

@@ -228,6 +228,43 @@ actor EngineService: NSObject {
         try? await sendJSON(["cmd": "new_game"])
     }
 
+    // MARK: - Pondering
+
+    /// Begin pondering the engine's predicted opponent reply.
+    /// Fire-and-forget — returns immediately. Server routes ponder output to
+    /// a separate queue so it can never contaminate analysis results.
+    func ponder(fen: String, ponderMove: String, engine: String = "primary") async {
+        try? await sendJSON([
+            "cmd":          "ponder",
+            "fen":          fen,
+            "ponder_move":  ponderMove,
+            "engine":       engine,
+        ])
+        // Response is {"type":"ok"} — swallowed by route() since "ok" is filtered
+    }
+
+    /// Opponent played the predicted move — convert accumulated ponder work into
+    /// a real search result. Returns same shape as engineMove().
+    func ponderhit(
+        fen:            String,
+        movetime:       Int    = 1000,
+        bestMoveEngine: String = "primary"
+    ) async throws -> EngineMoveResponse {
+        let data = try await request(
+            ["cmd": "ponderhit", "fen": fen, "movetime": movetime, "engine": bestMoveEngine],
+            expectedTypes: ["engine_move"],
+            timeout: Double(movetime) / 1000.0 + 15.0
+        )
+        let result = try decode(EngineMoveResponse.self, from: data)
+        if result.type == "error" { throw EngineError.serverError(result.message ?? "unknown") }
+        return result
+    }
+
+    /// Opponent played a different move — discard ponder. Fire-and-forget.
+    func stopPonder(engine: String = "primary") async {
+        try? await sendJSON(["cmd": "stop_ponder", "engine": engine])
+    }
+
     /// Query the server for the list of registered engine names.
     /// Call once after connecting; the result populates AppSettings.availableEngines
     /// so the UI can show live pickers instead of free-text fields.

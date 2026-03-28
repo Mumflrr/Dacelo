@@ -1,5 +1,6 @@
 // ChessRobot.swift
 // Dacelo
+<<<<<<< Updated upstream
 //
 // Async robot that requests moves from EngineService and applies a
 // difficulty filter before returning the chosen move.
@@ -42,11 +43,14 @@
 // makes the engine marginally weaker but still plays nearly perfectly.
 // The sampling approach above is what actually makes the engine play like a human
 // at a given skill level, regardless of hardware speed.
+=======
+>>>>>>> Stashed changes
 
 import Foundation
 
 // MARK: - DifficultyProfile
 
+<<<<<<< Updated upstream
 /// Pre-computed parameters for a given difficulty level.
 /// Computed once per game so the values are consistent throughout.
 struct DifficultyProfile {
@@ -73,6 +77,24 @@ struct DifficultyProfile {
     }
 
     /// Human-readable label for display in Settings
+=======
+struct DifficultyProfile {
+    let difficulty:          Double
+    let acceptanceThreshold: Int
+    let temperature:         Double
+    let openingMoves:        Int
+    let openingBookProb:     Double
+
+    init(difficulty: Double, openingMoves: Int = 8) {
+        let d = max(0.0, min(1.0, difficulty))
+        self.difficulty          = d
+        self.openingMoves        = openingMoves
+        self.openingBookProb     = d
+        self.acceptanceThreshold = Int((1.0 - d) * 390 + 10)
+        self.temperature         = (1.0 - d) * 295 + 5
+    }
+
+>>>>>>> Stashed changes
     var label: String {
         switch difficulty {
         case 0.0..<0.2:  return "Beginner"
@@ -88,6 +110,7 @@ struct DifficultyProfile {
 // MARK: - RobotController
 
 final class RobotController: @unchecked Sendable {
+<<<<<<< Updated upstream
     private let lock                         = NSLock()
     private var _isPaused:    Bool           = false
     private var _isCancelled: Bool           = false
@@ -97,6 +120,12 @@ final class RobotController: @unchecked Sendable {
         get { lock.withLock { _isPaused } }
         set { lock.withLock { _isPaused = newValue } }
     }
+=======
+    private let lock                               = NSLock()
+    private var _isCancelled: Bool                 = false
+    private var _manualMove: (from: Int, to: Int)? = nil
+
+>>>>>>> Stashed changes
     var isCancelled: Bool {
         get { lock.withLock { _isCancelled } }
         set { lock.withLock { _isCancelled = newValue } }
@@ -108,6 +137,7 @@ final class RobotController: @unchecked Sendable {
         lock.withLock { defer { _manualMove = nil }; return _manualMove }
     }
     func reset() {
+<<<<<<< Updated upstream
         lock.withLock { _isPaused = false; _isCancelled = false; _manualMove = nil }
     }
 }
@@ -119,14 +149,28 @@ private struct Candidate {
     let to:        BoardIndex
     let promotion: PieceType?
     let scoreCP:   Int          // normalised to side-to-move positive
+=======
+        lock.withLock { _isCancelled = false; _manualMove = nil }
+    }
+}
+
+// MARK: - Candidate
+
+private struct Candidate {
+    let from: BoardIndex; let to: BoardIndex
+    let promotion: PieceType?; let scoreCP: Int
+>>>>>>> Stashed changes
 }
 
 // MARK: - ChessRobot
 
 actor ChessRobot {
 
-    // MARK: Configuration
+    let side: Side; let engine: EngineService
+    let moveTimeMs: Int; let bestMoveEngine: String
+    let profile: DifficultyProfile
 
+<<<<<<< Updated upstream
     let side:           Side
     let engine:         EngineService
     let moveTimeMs:     Int
@@ -145,10 +189,15 @@ actor ChessRobot {
     // them synchronously after the robot Task completes (via await MainActor.run).
     nonisolated(unsafe) private(set) var lastPonderFEN:  String? = nil
     nonisolated(unsafe) private(set) var lastPonderMove: String? = nil   // incremented after each move played
+=======
+    nonisolated let controller: RobotController
+    private var moveCount: Int = 0
+>>>>>>> Stashed changes
 
-    // MARK: Init
+    nonisolated(unsafe) private(set) var lastPonderMove: String? = nil
 
     init(
+<<<<<<< Updated upstream
         side:           Side,
         engine:         EngineService,
         moveTimeMs:     Int    = 3000,
@@ -262,9 +311,45 @@ actor ChessRobot {
 
             if controller.isPaused {
                 if let manual = await waitForManualOrResume() { return manual }
+=======
+        side: Side, engine: EngineService,
+        moveTimeMs: Int = 1000, bestMoveEngine: String = "primary",
+        difficulty: Double = 1.0, openingMoves: Int = 8
+    ) {
+        self.side = side; self.engine = engine
+        self.moveTimeMs = moveTimeMs; self.bestMoveEngine = bestMoveEngine
+        self.profile = DifficultyProfile(difficulty: difficulty, openingMoves: openingMoves)
+        self.controller = RobotController()
+    }
+
+    func think(board: ChessBoard) async -> (from: BoardIndex, to: BoardIndex, promotion: PieceType?)? {
+        guard !controller.isCancelled else { return nil }
+        lastPonderMove = nil
+        let fen = board.fen
+
+        // Opening: random legal move at low difficulty
+        if moveCount < profile.openingMoves && profile.difficulty < 1.0 {
+            if Double.random(in: 0..<1) > profile.openingBookProb {
+                if let r = randomLegalMove(board: board) { moveCount += 1; return r }
+            }
+        }
+
+        do {
+            if profile.difficulty >= 1.0 {
+                let resp = try await engine.engineMove(
+                    fen: fen, movetime: moveTimeMs, bestMoveEngine: bestMoveEngine)
+>>>>>>> Stashed changes
                 guard !controller.isCancelled else { return nil }
+                guard let fs = resp.from, let ts = resp.to,
+                      let from = BoardIndex.from(algebraic: fs),
+                      let to   = BoardIndex.from(algebraic: ts) else { return nil }
+                let pv = resp.pv ?? []
+                if pv.count >= 2 { lastPonderMove = pv[1] }
+                moveCount += 1
+                return (from: from, to: to, promotion: resp.promotion.flatMap { PieceType(rawValue: $0.lowercased()) })
             }
 
+<<<<<<< Updated upstream
             moveCount += 1
             let cpLoss = bestScoreCP - chosen.scoreCP
             print("[ChessRobot:\(bestMoveEngine)] d=\(String(format: "%.2f", profile.difficulty)) " +
@@ -283,20 +368,46 @@ actor ChessRobot {
 
             return (from: chosen.from, to: chosen.to, promotion: chosen.promotion)
 
+=======
+            let result = try await engine.analyse(
+                fen: fen, movetime: moveTimeMs,
+                evalEngine: bestMoveEngine, bestMoveEngine: bestMoveEngine)
+            guard !controller.isCancelled else { return nil }
+            guard let fs = result.from, let ts = result.to,
+                  let from = BoardIndex.from(algebraic: fs),
+                  let to   = BoardIndex.from(algebraic: ts) else { return nil }
+            let bestCP = result.score_cp ?? 0
+            let prom   = result.promotion.flatMap { PieceType(rawValue: $0.lowercased()) }
+            var candidates = [Candidate(from: from, to: to, promotion: prom, scoreCP: bestCP)]
+            for alt in (result.alternatives ?? []) {
+                guard let af = alt.from, let at = alt.to,
+                      let f = BoardIndex.from(algebraic: af),
+                      let t = BoardIndex.from(algebraic: at) else { continue }
+                let ap = alt.promotion.flatMap { PieceType(rawValue: $0.lowercased()) }
+                candidates.append(Candidate(from: f, to: t, promotion: ap,
+                    scoreCP: alt.score_cp ?? (bestCP - profile.acceptanceThreshold - 1)))
+            }
+            let pool   = candidates.filter { bestCP - $0.scoreCP <= profile.acceptanceThreshold }
+            let chosen = softmaxSample(from: pool.isEmpty ? [candidates[0]] : pool,
+                                       temperature: profile.temperature)
+            let pv = result.pv ?? []
+            if pv.count >= 2 { lastPonderMove = pv[1] }
+            moveCount += 1
+            return (from: chosen.from, to: chosen.to, promotion: chosen.promotion)
+>>>>>>> Stashed changes
         } catch {
-            print("[ChessRobot:\(bestMoveEngine)] Engine error: \(error.localizedDescription)")
-            return nil
+            print("[ChessRobot] \(error.localizedDescription)"); return nil
         }
     }
 
-    // MARK: - Cancel
+    func cancel() { controller.isCancelled = true }
 
-    func cancel() {
-        controller.isCancelled = true
-        thinkTask?.cancel()
-        thinkTask = nil
+    private func randomLegalMove(board: ChessBoard) -> (from: BoardIndex, to: BoardIndex, promotion: PieceType?)? {
+        guard let move = ChessMoveGenerator.legalMoves(for: board).randomElement() else { return nil }
+        return (from: move.from, to: move.to, promotion: move.promotion)
     }
 
+<<<<<<< Updated upstream
     // MARK: - Pause helpers
 
     private func waitForManualOrResume() async -> (from: BoardIndex, to: BoardIndex, promotion: PieceType?)? {
@@ -307,6 +418,16 @@ actor ChessRobot {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return nil
+=======
+    private func softmaxSample(from candidates: [Candidate], temperature: Double) -> Candidate {
+        guard candidates.count > 1 else { return candidates[0] }
+        let mx = Double(candidates.map { $0.scoreCP }.max() ?? 0)
+        let w  = candidates.map { exp((Double($0.scoreCP) - mx) / temperature) }
+        let t  = w.reduce(0, +)
+        var r  = Double.random(in: 0..<t)
+        for (c, wt) in zip(candidates, w) { r -= wt; if r <= 0 { return c } }
+        return candidates.last!
+>>>>>>> Stashed changes
     }
 
     // MARK: - Move selection helpers

@@ -32,13 +32,13 @@ struct DaceloApp: App {
             }
 
             CommandMenu("Game") {
-                Button(app.gameStore.isPaused ? "Resume Engine" : "Pause Engine") {
-                    app.gameStore.togglePause()
-                }
-                .keyboardShortcut(.space, modifiers: [])
-                .disabled(app.gameStore.gameMode != .humanVsEngine)
+                //Button(app.gameStore.isPaused ? "Resume Engine" : "Pause Engine") {
+                //    app.gameStore.togglePause()
+                //}
+                //.keyboardShortcut(.space, modifiers: [])
+                //.disabled(app.gameStore.gameMode != .humanVsEngine)
 
-                Divider()
+                //Divider()
 
                 Button(app.gameStore.gameMode == .analysisOnly ? "Exit Analysis" : "Enter Analysis") {
                     if app.gameStore.gameMode == .analysisOnly {

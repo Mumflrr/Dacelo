@@ -178,7 +178,7 @@ struct ContentView: View {
         let showClock  = !settings.timeControl.isUnlimited
         return HStack(spacing: 8) {
             // ── Left: action buttons ──────────────────────────
-            if game.gameMode == .humanVsEngine { pauseButton }
+            //if game.gameMode == .humanVsEngine { pauseButton }
             if game.gameMode == .analysisOnly  { newGameButton }
             hintButton
             navButtons
@@ -273,19 +273,7 @@ struct ContentView: View {
         game.gameMode == .humanVsEngine && game.playerColor == .black
     }
 
-    @ViewBuilder private var pauseButton: some View {
-        Button { game.togglePause() } label: {
-            Label(
-                game.isPaused ? "Resume" : "Pause",
-                systemImage: game.isPaused ? "play.fill" : "pause.fill"
-            )
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(game.isPaused ? .green : .orange)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(Capsule().fill((game.isPaused ? Color.green : Color.orange).opacity(0.15)))
-            .overlay(Capsule().strokeBorder((game.isPaused ? Color.green : Color.orange).opacity(0.4), lineWidth: 1))
-        }.buttonStyle(.plain)
-    }
+
 
     @ViewBuilder private var newGameButton: some View {
         Button { app.newGame() } label: {
@@ -367,22 +355,8 @@ struct BoardControlBar: View {
     private var engineDisplayName: String {
         settings.bestMoveEngine.isEmpty ? "Engine" : settings.bestMoveEngine.capitalized
     }
-    private var pauseButtonLabel: String {
-        game.isPaused ? "Resume" : "Pause"
-    }
-
     var body: some View {
         HStack(spacing: 10) {
-            if game.gameMode == .humanVsEngine {
-                Button { game.togglePause() } label: {
-                    Label(pauseButtonLabel, systemImage: game.isPaused ? "play.fill" : "pause.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(game.isPaused ? .green : .orange)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Capsule().fill((game.isPaused ? Color.green : Color.orange).opacity(0.15)))
-                        .overlay(Capsule().strokeBorder((game.isPaused ? Color.green : Color.orange).opacity(0.4), lineWidth: 1))
-                }.buttonStyle(.plain)
-            }
             if game.gameMode == .analysisOnly {
                 Button { app.newGame() } label: {
                     Label("New Game", systemImage: "arrow.counterclockwise")
@@ -713,13 +687,18 @@ struct SettingsView: View {
                             get: { Double(settings.difficultyPct) },
                             set: { settings.difficultyPct = Int($0) }
                         ), in: 0...100, step: 5)
+<<<<<<< Updated upstream
                         .frame(maxWidth: 160).accentColor(.purple)
+=======
+                        .frame(maxWidth: 160).tint(.purple)
+>>>>>>> Stashed changes
                         Text(DifficultyProfile(difficulty: settings.difficulty).label)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.purple)
                             .frame(width: 90, alignment: .leading)
                     }
                 }
+<<<<<<< Updated upstream
                 Divider().background(.white.opacity(0.1))
                 SettingsRow(label: "Opening moves") {
                     HStack(spacing: 10) {
@@ -730,6 +709,8 @@ struct SettingsView: View {
                             .foregroundStyle(.white.opacity(0.6))
                     }
                 }
+=======
+>>>>>>> Stashed changes
             }
             Divider().background(.white.opacity(0.1))
             SettingsRow(label: "Time control") {
@@ -1117,7 +1098,6 @@ struct SettingsView: View {
 }
 
 // MARK: - Board Theme Swatch
-
 struct BoardThemeSwatch: View {
     let theme: BoardTheme
     let isSelected: Bool
